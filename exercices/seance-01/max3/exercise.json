@@ -1,0 +1,15 @@
+{
+  "id": "seance-01-max3",
+  "title": "Maximum de trois entiers",
+  "statement": "Lire trois entiers sur stdin puis afficher le plus grand.",
+  "sources": ["src/main.c"],
+  "main": "src/main.c",
+  "stdin": "3 4 9\n",
+  "expected_stdout": "max = 9\n",
+  "expected_stderr": "",
+  "local": {
+    "build": "make",
+    "run": "make run",
+    "test": "make test"
+  }
+}

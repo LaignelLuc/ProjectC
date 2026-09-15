@@ -1,0 +1,15 @@
+{
+  "id": "seance-03-etudiants",
+  "title": "Structure Etudiant",
+  "statement": "Creer une structure opaque, allouer ses champs dynamiquement, afficher puis liberer.",
+  "sources": ["src/main.c", "src/etudiant.c", "include/projet/etudiant.h"],
+  "main": "src/main.c",
+  "stdin": "",
+  "expected_stdout": "Ada: 15.50\n",
+  "expected_stderr": "",
+  "local": {
+    "build": "make",
+    "run": "make run",
+    "test": "make test"
+  }
+}

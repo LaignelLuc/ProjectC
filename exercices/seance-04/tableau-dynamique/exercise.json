@@ -1,0 +1,15 @@
+{
+  "id": "seance-04-tableau-dynamique",
+  "title": "Tableau dynamique",
+  "statement": "Complétez les étapes marquées TODO : agrandir le tableau avec realloc et un pointeur temporaire, initialiser les nouveaux éléments, calculer la somme puis libérer la mémoire. La sortie attendue est taille=5 somme=15.",
+  "sources": ["src/main.c"],
+  "main": "src/main.c",
+  "stdin": "",
+  "expected_stdout": "taille=5 somme=15\n",
+  "expected_stderr": "",
+  "local": {
+    "build": "make",
+    "run": "make run",
+    "test": "make test"
+  }
+}

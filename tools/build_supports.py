@@ -1,0 +1,2474 @@
+#!/usr/bin/env python3
+import html
+import hashlib
+import json
+import re
+import shutil
+import subprocess
+import base64
+import textwrap
+import unicodedata
+import zipfile
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+COURSES = ROOT / "cours"
+COURSE_ASSETS = COURSES / "assets"
+EXERCISES = ROOT / "exercices"
+BUILD = ROOT / "build" / "supports"
+PLAYER_SRC = ROOT / "web" / "player"
+PLAYER_DST = BUILD / "player"
+VENDOR_SRC = ROOT / "web" / "vendor"
+VENDOR_DST = BUILD / "vendor"
+CODEMIRROR_INCLUDE = BUILD / "codemirror-include.html"
+TSCC_INCLUDE = BUILD / "tscc-include.html"
+PDF_DST = BUILD / "assets" / "pdf"
+ZIP_DST = BUILD / "assets" / "zip"
+COURSE_ASSETS_DST = BUILD / "assets"
+PDF_FOOTER_TEX = BUILD / "pdf-footer.tex"
+TSCC_RUNTIME = PLAYER_DST / "tscc" / "tscc-runtime.js"
+TYPING_AUDIO_SRC = ROOT / "contributed" / "c-lesson-poc" / "typing.mp3"
+MATRIX_AUDIO_SRC = ROOT / "contributed" / "c-lesson-poc" / "matrix.mp3"
+PUBLIC_REPO = "https://github.com/nherbaut/BUT-INFO-S3-SAE-C"
+CREDITS = "Crédits : Nicolas Herbaut, Romain Giot et Pierre Ramet"
+COURSE_INDEX = "index-cours.html"
+FULL_PDF = "assets/pdf/but-info-s3-sae-c.pdf"
+FULL_ZIP = "assets/zip/but-info-s3-sae-c-starters.zip"
+QUIZ_INDEX = "quiz.html"
+QUIZ_PDF = "assets/pdf/but-info-s3-sae-c-quiz.pdf"
+PROJECT_PDF = "assets/pdf/projet-capteurs.pdf"
+SENSORS_PROJECT = ROOT / "projet" / "capteurs-starter"
+SENSORS_PROJECT_PDF = SENSORS_PROJECT / "build" / "projet-capteurs.pdf"
+MILESTONES_PAGE = "jalons.html"
+MILESTONES_PATH = COURSES / "jalons.md"
+EVALUATION_PAGE = "evaluation.html"
+EVALUATION_PATH = COURSES / "evaluation.md"
+ADMIN_PAGE = "admin.html"
+LIVE_CODE_PAGE = "live-code.html"
+LIVE_QUIZ_PAGE = "live-quiz.html"
+ADMIN_DIGEST = "$argon2id$v=19$m=65536,t=3,p=4$SDaf4HTJfRAO2wys9QIE7A$bLo2gTmVGol0ogx6vLCsYGPNZbIcqUNWS88ZuJZCgIo"
+DIRECTIVE = re.compile(r"^\{\{\s*(c_demo|c_exercise)\s*:\s*([^}]+?)\s*\}\}\s*$")
+CODE_FENCE = re.compile(r"^```\s*(?P<language>c|bash)(?:\s+\{(?P<attrs>[^}]*)\})?\s*$", re.I)
+CODE_FENCE_END = re.compile(r"^```\s*$")
+ADMONITION_FENCE = re.compile(r"^```\s*(?P<kind>todo|trap|warning|remember|tip|technical)\s*$", re.I)
+PLAYBACK_TYPING_ATTR_RE = re.compile(r"(?:^|\s)playback\s*=\s*typing(?:\s|$)", re.I)
+C_MAIN_RE = re.compile(r"\bint\s+main\s*\(", re.S)
+C_STDIN_RE = re.compile(r"\b(?:scanf|getchar|gets)\s*\(|\bfgets\s*\(|\bfscanf\s*\(\s*stdin\b|\bfread\s*\([^;]*\bstdin\b", re.S)
+C_ARGS_RE = re.compile(r"\bint\s+main\s*\([^)]*\b(?:argc|argv)\b", re.S)
+QUIZ_START = re.compile(r"^:::\s+quiz(?:\s+\{#([^}]+)\})?\s*$")
+QUESTION_START = re.compile(r"^:::\s+question(?:\s+\{#([^}]+)\})?\s*$")
+DIV_END = re.compile(r"^:::\s*$")
+OPTION_RE = re.compile(r"^\s*-\s+\[([ xX])\]\s+(.+?)\s*$")
+FIELD_RE = re.compile(r"^([A-Za-z_-]+):\s*(.*)$")
+BODY_RE = re.compile(r"<body[^>]*>(?P<body>.*)</body>", re.S)
+NAVIGATION_RE = re.compile(
+    r'<h(?P<heading_level>[12]) id="(?P<heading_id>[^"]+)">(?P<heading_content>.*?)</h[12]>'
+    r'|<(?P<nav_tag>[a-z][a-z0-9-]*)\b'
+    r'(?=[^>]*\bid="(?P<nav_id>[^"]+)")'
+    r'(?=[^>]*\bdata-nav-kind="(?P<nav_kind>[^"]+)")'
+    r'(?=[^>]*\bdata-nav-title="(?P<nav_title>[^"]*)")[^>]*>',
+    re.I | re.S,
+)
+TAG_RE = re.compile(r"<[^>]+>")
+TITLE_BLOCK_RE = re.compile(r"<header id=\"title-block-header\">.*?</header>", re.S)
+EXERCISE_PROPOSALS_RE = re.compile(
+    r'<h2 id="(?P<id>[^"]+)">(?P<title>(?:(?!</h2>).)*)</h2>\s*<ul>\s*(?P<items>.*?)\s*</ul>',
+    re.S,
+)
+LIST_ITEM_RE = re.compile(r"<li>(.*?)</li>", re.S)
+
+SESSION_ICON = "&#128218;"
+MILESTONE_ICON = "&#9873;"
+EXERCISE_ICON = "&#128187;"
+QUIZ_ICON = "&#10067;"
+
+ADMONITIONS = {
+    "todo": {
+        "message": "admonition.todo",
+        "icon": "&#9745;",
+        "title": "Action à réaliser",
+    },
+    "trap": {
+        "message": "admonition.trap",
+        "icon": "&#9888;",
+        "title": "Piège",
+    },
+    "warning": {
+        "message": "admonition.warning",
+        "icon": "&#9888;",
+        "title": "Attention",
+    },
+    "remember": {
+        "message": "admonition.remember",
+        "icon": "&#128273;",
+        "title": "À retenir",
+    },
+    "tip": {
+        "message": "admonition.tip",
+        "icon": "&#128161;",
+        "title": "Conseil",
+    },
+    "technical": {
+        "message": "admonition.technical",
+        "icon": "&#9881;",
+        "title": "Point technique",
+    },
+}
+
+
+def read_text(path):
+    return path.read_text(encoding="utf-8")
+
+
+def write_text(path, content):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
+def strip_tags(value):
+    return html.unescape(TAG_RE.sub("", value)).strip()
+
+
+def codemirror_css_links():
+    return """
+  <link rel="stylesheet" href="vendor/codemirror/codemirror.min.css">
+  <link rel="stylesheet" href="vendor/codemirror/material-darker.min.css">""".rstrip()
+
+
+def codemirror_script_tags():
+    return """
+<script src="vendor/codemirror/codemirror.min.js"></script>
+<script src="vendor/codemirror/clike.min.js"></script>""".strip()
+
+
+def asset_version(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()[:12]
+
+
+def tscc_script_tag():
+    bundle = PLAYER_SRC / "tscc" / "tscc-bundle.js"
+    return f'<script src="player/tscc/tscc-bundle.js?v={asset_version(bundle)}"></script>'
+
+
+def write_codemirror_include():
+    write_text(CODEMIRROR_INCLUDE, codemirror_script_tags() + "\n")
+
+
+def write_tscc_include():
+    write_text(TSCC_INCLUDE, tscc_script_tag() + "\n")
+
+
+def copy_course_assets():
+    if not COURSE_ASSETS.exists():
+        return
+    for source in COURSE_ASSETS.rglob("*"):
+        if source.is_file():
+            target = COURSE_ASSETS_DST / source.relative_to(COURSE_ASSETS)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+
+
+def site_footer():
+    return f"""
+<footer class="site-footer border-top">
+  <div class="container-fluid py-3">
+    <span>{html.escape(CREDITS)}</span>
+  </div>
+</footer>
+"""
+
+
+def write_pdf_footer():
+    write_text(
+        PDF_FOOTER_TEX,
+        r"""
+\usepackage{fancyhdr}
+\usepackage[most]{tcolorbox}
+\usepackage{etoolbox}
+\newenvironment{saecadmonition}[1]{
+  \def\saecadmonitioncolor{blue}
+  \def\saecadmonitionicon{\ensuremath{\square}}
+  \def\saecadmonitiontitle{Action a r\'ealiser}
+  \ifstrequal{#1}{trap}{\def\saecadmonitioncolor{orange}\def\saecadmonitionicon{\ensuremath{\triangle}}\def\saecadmonitiontitle{Pi\`ege}}{}
+  \ifstrequal{#1}{warning}{\def\saecadmonitioncolor{red}\def\saecadmonitionicon{\textbf{!}}\def\saecadmonitiontitle{Attention}}{}
+  \ifstrequal{#1}{remember}{\def\saecadmonitioncolor{blue}\def\saecadmonitionicon{\ensuremath{\star}}\def\saecadmonitiontitle{A retenir}}{}
+  \ifstrequal{#1}{tip}{\def\saecadmonitioncolor{green}\def\saecadmonitionicon{\ensuremath{+}}\def\saecadmonitiontitle{Conseil}}{}
+  \ifstrequal{#1}{technical}{\def\saecadmonitioncolor{gray}\def\saecadmonitionicon{\ensuremath{\diamond}}\def\saecadmonitiontitle{Point technique}}{}
+  \begin{tcolorbox}[colback=\saecadmonitioncolor!7,colframe=\saecadmonitioncolor!65!black,boxrule=0.6pt,arc=2pt,title={\saecadmonitionicon\quad\saecadmonitiontitle}]
+}{\end{tcolorbox}}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot[C]{\footnotesize Cr\'edits : Nicolas Herbaut, Romain Giot et Pierre Ramet}
+\fancyfoot[R]{\footnotesize \thepage}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0.2pt}
+\fancypagestyle{plain}{
+  \fancyhf{}
+  \fancyfoot[C]{\footnotesize Cr\'edits : Nicolas Herbaut, Romain Giot et Pierre Ramet}
+  \fancyfoot[R]{\footnotesize \thepage}
+  \renewcommand{\headrulewidth}{0pt}
+  \renewcommand{\footrulewidth}{0.2pt}
+}
+""".lstrip(),
+    )
+
+
+def course_infos():
+    infos = []
+    course_paths = sorted(
+        COURSES.glob("*.md"),
+        key=lambda path: (path.stem == "bonnes-pratiques", path.name),
+    )
+    for course in course_paths:
+        if course == MILESTONES_PATH:
+            continue
+        source = read_text(course)
+        title_match = re.search(r"^#\s+(.+)$", source, re.M)
+        title = title_match.group(1) if title_match else course.stem
+        infos.append(
+            {
+                "path": course,
+                "title": title,
+                "stem": course.stem,
+                "html": f"{course.stem}.html",
+                "pdf": f"assets/pdf/{course.stem}.pdf",
+            }
+        )
+    return infos
+
+
+def milestone_infos():
+    source = read_text(MILESTONES_PATH)
+    milestones = []
+    in_code_fence = False
+    for line in source.splitlines():
+        if line.startswith("```"):
+            in_code_fence = not in_code_fence
+            continue
+        if in_code_fence:
+            continue
+        match = re.match(r"^##\s+(.+?)(?:\s+\{#(?P<id>[A-Za-z][A-Za-z0-9_-]*)\})?\s*$", line)
+        if not match:
+            continue
+        title = match.group(1)
+        normalized = unicodedata.normalize("NFKD", title)
+        normalized = "".join(char for char in normalized if not unicodedata.combining(char))
+        milestone_id = match.group("id") or re.sub(r"[^a-z0-9]", "-", normalized.lower()).strip("-")
+        milestones.append({"title": title, "id": milestone_id})
+    return milestones
+
+
+def validate_milestone_anchors(page_path):
+    page = read_text(page_path)
+    for milestone in milestone_infos():
+        heading = rf'<h2 id="{re.escape(milestone["id"])}"'
+        if not re.search(heading, page):
+            raise RuntimeError(
+                f"Ancre de jalon introuvable dans {page_path.name}: "
+                f"#{milestone['id']}"
+            )
+
+
+def load_exercise(path_text):
+    exercise_dir = (ROOT / path_text.strip()).resolve()
+    meta_path = exercise_dir / "exercise.json"
+    meta = json.loads(read_text(meta_path))
+    files = []
+    for source in meta["sources"]:
+        source_path = exercise_dir / source
+        files.append({"name": source, "content": read_text(source_path)})
+    meta["path"] = str(exercise_dir.relative_to(ROOT))
+    meta["files"] = files
+    meta["browser_runnable"] = meta.get("browser_runnable", len(files) == 1)
+    meta["uses_stdin"] = bool(meta.get("stdin")) or any(uses_stdin(file["content"]) for file in files)
+    meta["uses_args"] = bool(meta.get("argv")) or any(uses_arguments(file["content"]) for file in files)
+    return meta
+
+
+def all_exercises():
+    exercises = []
+    for meta_path in sorted(EXERCISES.glob("seance-*/*/exercise.json")):
+        exercises.append(load_exercise(str(meta_path.parent.relative_to(ROOT))))
+    return exercises
+
+
+def collect_div_block(lines, start_index):
+    block = [lines[start_index]]
+    depth = 1
+    index = start_index + 1
+    while index < len(lines):
+        line = lines[index]
+        if QUIZ_START.match(line) or QUESTION_START.match(line):
+            depth += 1
+        elif DIV_END.match(line):
+            depth -= 1
+        block.append(line)
+        index += 1
+        if depth == 0:
+            return block, index
+    raise ValueError("Bloc quiz non ferme")
+
+
+def parse_quiz(block, fallback_id):
+    start = QUIZ_START.match(block[0])
+    quiz_id = start.group(1) if start and start.group(1) else fallback_id
+    quiz = {"id": quiz_id, "title": quiz_id, "questions": []}
+    index = 1
+    while index < len(block) - 1:
+        line = block[index]
+        question_start = QUESTION_START.match(line)
+        if question_start:
+            question_block, new_index = collect_div_block(block, index)
+            quiz["questions"].append(parse_question(question_block, f"{quiz_id}-q{len(quiz['questions']) + 1}"))
+            index = new_index
+            continue
+        field = FIELD_RE.match(line)
+        if field:
+            key = field.group(1).strip().lower()
+            if key in {"title", "description"}:
+                quiz[key] = field.group(2).strip()
+        index += 1
+    if not quiz["questions"]:
+        raise ValueError(f"Quiz {quiz_id} sans question")
+    return quiz
+
+
+def parse_question(block, fallback_id):
+    start = QUESTION_START.match(block[0])
+    question_id = start.group(1) if start and start.group(1) else fallback_id
+    question = {"id": question_id, "title": question_id, "description": "", "options": []}
+    current_option = None
+    for line in block[1:-1]:
+        option = OPTION_RE.match(line)
+        if option:
+            current_option = {
+                "id": f"{question_id}-o{len(question['options']) + 1}",
+                "text": option.group(2).strip(),
+                "correct": option.group(1).lower() == "x",
+                "hint": "",
+            }
+            question["options"].append(current_option)
+            continue
+        field = FIELD_RE.match(line.strip())
+        if field:
+            key = field.group(1).strip().lower()
+            value = field.group(2).strip()
+            if current_option and key == "hint":
+                current_option["hint"] = value
+            elif key in {"title", "description"}:
+                question[key] = value
+    if not question["options"]:
+        raise ValueError(f"Question {question_id} sans option")
+    if not any(option["correct"] for option in question["options"]):
+        raise ValueError(f"Question {question_id} sans bonne reponse")
+    return question
+
+
+def quizzes_from_source(source, course):
+    lines = source.splitlines()
+    quizzes = []
+    index = 0
+    while index < len(lines):
+        if QUIZ_START.match(lines[index]):
+            block, index = collect_div_block(lines, index)
+            quiz = parse_quiz(block, f"{course['stem']}-quiz-{len(quizzes) + 1}")
+            quiz["course_title"] = course["title"]
+            quiz["course_html"] = course["html"]
+            quiz["course_stem"] = course["stem"]
+            quizzes.append(quiz)
+        else:
+            index += 1
+    return quizzes
+
+
+def all_quizzes(courses):
+    quizzes = []
+    for course in courses:
+        quizzes.extend(quizzes_from_source(read_text(course["path"]), course))
+    return quizzes
+
+
+def live_question_bank(courses):
+    questions = []
+    for quiz in all_quizzes(courses):
+        for question in quiz["questions"]:
+            questions.append(
+                {
+                    "id": f'{quiz["course_stem"]}:{quiz["id"]}:{question["id"]}',
+                    "label": f'{quiz["course_title"]} - {quiz["title"]} - {question["title"]}',
+                    "course_title": quiz["course_title"],
+                    "quiz_title": quiz["title"],
+                    "question": question,
+                }
+            )
+    return questions
+
+
+def admin_flow_items(course, source, raw_body):
+    items = []
+    quizzes = iter(quizzes_from_source(source, course))
+    for navigation_item in page_navigation_items(raw_body):
+        if navigation_item["type"] == "course":
+            items.append(
+                {
+                    "type": "section",
+                    "course_title": course["title"],
+                    "href": f'{course["html"]}#{navigation_item["id"]}',
+                    "level": navigation_item["level"],
+                    "title": navigation_item["title"],
+                }
+            )
+        elif navigation_item["type"] == "quiz":
+            quiz = next(quizzes)
+            for question in quiz["questions"]:
+                items.append(
+                    {
+                        "type": "question",
+                        "id": f'{course["stem"]}:{quiz["id"]}:{question["id"]}',
+                        "course_title": course["title"],
+                        "quiz_title": quiz["title"],
+                        "title": question["title"],
+                        "question": question,
+                    }
+                )
+        else:
+            items.append(
+                {
+                    "type": "content",
+                    "content_kind": navigation_item["type"],
+                    "course_title": course["title"],
+                    "href": f'{course["html"]}#{navigation_item["id"]}',
+                    "level": navigation_item["level"],
+                    "title": navigation_item["title"],
+                }
+            )
+    return items
+
+
+def render_html_player(kind, path_text):
+    exercise = load_exercise(path_text)
+    readonly = "true" if kind == "c_demo" else "false"
+    payload = base64.b64encode(json.dumps(exercise, ensure_ascii=False).encode("utf-8")).decode("ascii")
+    title = html.escape(exercise["title"])
+    statement = html.escape(exercise.get("statement", ""))
+    local_path = html.escape(exercise["path"])
+    command = html.escape(exercise["local"]["run"])
+    label_key = "embeddedExercise.demoLabel" if kind == "c_demo" else "embeddedExercise.interactiveLabel"
+    browser_label_key = "embeddedExercise.browserRunnable" if exercise["browser_runnable"] else "embeddedExercise.localOnly"
+    browser_class = "text-bg-success" if exercise["browser_runnable"] else "text-bg-warning"
+    anchor_id = f"exercise-{exercise['id']}"
+    local_modal_id = f"local-{exercise['id']}"
+    content_kind = "example" if kind == "c_demo" else "exercise"
+    icon = "{}" if content_kind == "example" else "&lt;/&gt;"
+    return f"""
+<details id="{html.escape(anchor_id, quote=True)}" class="embedded-exercise embedded-exercise--{content_kind} card my-4" data-nav-kind="exercise" data-nav-title="{html.escape(exercise['title'], quote=True)}">
+<summary class="card-header h5">
+  <span class="content-kind content-kind--{content_kind}"><span class="content-kind__icon" aria-hidden="true">{icon}</span><span data-message="{label_key}"></span></span>
+  <span class="embedded-exercise__title">{title}</span>
+  <span class="badge {browser_class} ms-2" data-message="{browser_label_key}"></span>
+  <button class="embedded-exercise__local-button" type="button" data-local-modal-open="{html.escape(local_modal_id, quote=True)}" data-message-title="embeddedExercise.localInstructions"><span aria-hidden="true">&#128187;</span><span class="visually-hidden" data-message="embeddedExercise.localInstructions"></span></button>
+</summary>
+<div class="card-body">
+<p class="card-text">{statement}</p>
+<c-player data-content-kind="{content_kind}" data-readonly="{readonly}" data-exercise-b64="{payload}"></c-player>
+</div>
+</details>
+<div class="local-run-modal" id="{html.escape(local_modal_id, quote=True)}" data-local-modal hidden>
+<div class="local-run-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="{html.escape(local_modal_id, quote=True)}-title">
+<div class="local-run-modal__header">
+<h2 class="h5 mb-0" id="{html.escape(local_modal_id, quote=True)}-title"><span data-message="embeddedExercise.localVersion"></span> {title}</h2>
+<button class="btn-close" type="button" data-local-modal-close><span class="visually-hidden" data-message="embeddedExercise.close"></span></button>
+</div>
+<p class="mb-3" data-message="embeddedExercise.localInstructionsBody"></p>
+<pre class="local-run-modal__commands mb-0"><code>cd {local_path}
+{command}</code></pre>
+</div>
+</div>
+"""
+
+
+def encode_data(value):
+    return base64.b64encode(json.dumps(value, ensure_ascii=False).encode("utf-8")).decode("ascii")
+
+
+def is_complete_c_program(source):
+    return bool(C_MAIN_RE.search(source))
+
+
+def uses_stdin(source):
+    return bool(C_STDIN_RE.search(source))
+
+
+def uses_arguments(source):
+    return bool(C_ARGS_RE.search(source))
+
+
+def render_html_code_example(source, index, anchor_index):
+    payload = encode_data(
+        {
+            "id": f"code-example-{index}",
+            "title": f"Exemple C {index}",
+            "statement": "",
+            "sources": ["main.c"],
+            "main": "main.c",
+            "stdin": "",
+            "argv": "",
+            "expected_stdout": "",
+            "expected_stderr": "",
+            "path": "",
+            "files": [{"name": "main.c", "content": source}],
+            "browser_runnable": True,
+            "uses_stdin": uses_stdin(source),
+            "uses_args": uses_arguments(source),
+        }
+    )
+    title = f"Exemple C {index}"
+    return (
+        f'<c-player id="code-block-{anchor_index}" data-nav-kind="code" '
+        f'data-nav-title="{title}" data-content-kind="example" data-readonly="false" '
+        f'data-exercise-b64="{payload}"></c-player>'
+    )
+
+
+def render_html_typing_lesson(source, index, language, anchor_index):
+    lesson_hash = hashlib.sha256(f"{language}\0{source}".encode("utf-8")).hexdigest()[:12]
+    lesson_id = f"typing-lesson-{lesson_hash}"
+    payload = encode_data(
+        {
+            "id": lesson_id,
+            "title": "",
+            "language": language,
+            "source": source,
+        }
+    )
+    title = f"Lecture guidée {language.upper()} {index}"
+    return (
+        f'<c-typing-player id="code-block-{anchor_index}" data-nav-kind="guided-reading" '
+        f'data-nav-title="{title}" data-content-kind="guided-reading" '
+        f'data-lesson-b64="{payload}"></c-typing-player>'
+    )
+
+
+def render_html_code_block(language, code_lines, anchor_index):
+    title = f"Bloc de code {language.upper()} {anchor_index}"
+    source = "\n".join(code_lines)
+    return f'''::: {{#code-block-{anchor_index} .course-code-block data-nav-kind="code" data-nav-title="{title}"}}
+```{language}
+{source}
+```
+:::'''
+
+
+def render_html_quiz(quiz, fold_validated=False):
+    payload = encode_data(quiz)
+    folded = ' data-fold-validated="true"' if fold_validated else ""
+    anchor_id = f"quiz-{quiz['id']}"
+    title = html.escape(quiz["title"], quote=True)
+    return f'<quiz-player id="{html.escape(anchor_id, quote=True)}" data-quiz-b64="{payload}" data-nav-kind="quiz" data-nav-title="{title}"{folded}></quiz-player>'
+
+
+def render_pdf_quiz(quiz, show_answers=True):
+    blocks = [f"## {quiz['course_title']} - {quiz['title']}", ""]
+    if quiz.get("description"):
+        blocks.extend([quiz["description"], ""])
+    for question in quiz["questions"]:
+        blocks.append(f"### {question['title']}")
+        blocks.append("")
+        if question.get("description"):
+            blocks.extend([question["description"], ""])
+        for option in question["options"]:
+            marker = "[x]" if option["correct"] and show_answers else "[ ]"
+            blocks.append(f"- {marker} {option['text']}")
+            if option.get("hint"):
+                blocks.append(f"  - Indice : {option['hint']}")
+        blocks.append("")
+    return "\n".join(blocks)
+
+
+def exercise_directives(source):
+    paths = []
+    for line in source.splitlines():
+        match = DIRECTIVE.match(line)
+        if match:
+            paths.append(match.group(2).strip())
+    return paths
+
+
+def starter_zip_name(stem):
+    return f"assets/zip/{stem}-starters.zip"
+
+
+def write_starter_zip(output_path, exercises):
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    seen = set()
+    with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        common = EXERCISES / "common.mk"
+        if common.exists():
+            archive.write(common, common.relative_to(ROOT))
+        for exercise in exercises:
+            exercise_dir = ROOT / exercise["path"]
+            entries = []
+            for name in ["exercise.json", "Makefile", "README.md", ".gitignore"]:
+                path = exercise_dir / name
+                if path.exists() and path.is_file():
+                    entries.append(path)
+            for directory in ["src", "include", "tests"]:
+                path = exercise_dir / directory
+                if path.exists() and path.is_dir():
+                    entries.extend(sorted(file for file in path.rglob("*") if file.is_file()))
+            for file_path in entries:
+                arcname = str(file_path.relative_to(ROOT))
+                if arcname not in seen:
+                    seen.add(arcname)
+                    archive.write(file_path, arcname)
+
+
+def render_pdf_block(kind, path_text):
+    exercise = load_exercise(path_text)
+    label = "Demonstration" if kind == "c_demo" else "Exercice"
+    blocks = [f"### {label} - {exercise['title']}", ""]
+    blocks.append(exercise.get("statement", ""))
+    blocks.append("")
+    for file in exercise["files"]:
+        blocks.append(f"#### `{file['name']}`")
+        blocks.append("")
+        blocks.append("```c")
+        blocks.append(file["content"].rstrip())
+        blocks.append("```")
+        blocks.append("")
+    blocks.append("Commandes locales :")
+    blocks.append("")
+    blocks.append("```bash")
+    blocks.append(f"cd {exercise['path']}")
+    blocks.append(exercise["local"]["build"])
+    blocks.append(exercise["local"]["run"])
+    blocks.append(exercise["local"]["test"])
+    blocks.append("```")
+    blocks.append("")
+    if exercise.get("stdin"):
+        blocks.append("Entree standard proposee :")
+        blocks.append("")
+        blocks.append("```text")
+        blocks.append(exercise["stdin"].rstrip())
+        blocks.append("```")
+        blocks.append("")
+    if exercise.get("expected_stdout"):
+        blocks.append("Sortie attendue :")
+        blocks.append("")
+        blocks.append("```text")
+        blocks.append(exercise["expected_stdout"].rstrip())
+        blocks.append("```")
+        blocks.append("")
+    return "\n".join(blocks)
+
+
+def render_html_admonition(kind, source, document_id, occurrence):
+    metadata = ADMONITIONS[kind]
+    body = textwrap.dedent(source).strip()
+    icon = metadata["icon"]
+    label = metadata["message"]
+    title = metadata["title"]
+    anchor_id = f"admonition-{occurrence}"
+    if kind != "todo":
+        return f'''::: {{#{anchor_id} .course-admonition .course-admonition--{kind} data-nav-kind="admonition" data-nav-title="{title}" role="note"}}
+<div class="course-admonition__header"><span class="course-admonition__icon" aria-hidden="true">{icon}</span><strong data-message="{label}"></strong></div>
+
+::: {{.course-admonition__body}}
+{body}
+:::
+:::'''
+
+    stable_key = f"{document_id}\0{occurrence}\0{source}"
+    todo_id = hashlib.sha256(stable_key.encode("utf-8")).hexdigest()[:16]
+    return f'''::: {{#{anchor_id} .course-admonition .course-admonition--todo data-nav-kind="admonition" data-nav-title="{title}" data-todo-id="{todo_id}" role="note"}}
+<div class="course-admonition__header"><span class="course-admonition__icon" aria-hidden="true">{icon}</span><strong data-message="{label}"></strong></div>
+
+::: {{.course-admonition__body .course-admonition__body--todo data-todo-complete="" data-message-aria-label="todo.complete" role="button" tabindex="0"}}
+{body}
+:::
+<div class="todo-confetti" aria-hidden="true"></div>
+:::'''
+
+
+def render_pdf_admonition(kind, source):
+    latex_escapes = {
+        "#": r"\#",
+        "$": r"\$",
+        "%": r"\%",
+        "&": r"\&",
+        "_": r"\_",
+        "{": r"\{",
+        "}": r"\}",
+        "~": r"\textasciitilde{}",
+        "^": r"\textasciicircum{}",
+        "\\": r"\textbackslash{}",
+    }
+    latex_body = "".join(latex_escapes.get(character, character) for character in source.strip())
+    return f"\\begin{{saecadmonition}}{{{kind}}}\n\n{latex_body}\n\n\\end{{saecadmonition}}"
+
+
+def expand_markdown(source, html_mode, document_id=""):
+    lines = source.splitlines()
+    output = []
+    index = 0
+    quiz_count = 0
+    code_example_count = 0
+    code_block_count = 0
+    admonition_count = 0
+    while index < len(lines):
+        line = lines[index]
+        admonition_fence = ADMONITION_FENCE.match(line)
+        if admonition_fence:
+            kind = admonition_fence.group("kind").lower()
+            index += 1
+            body_lines = []
+            while index < len(lines) and not CODE_FENCE_END.match(lines[index]):
+                body_lines.append(lines[index])
+                index += 1
+            if index >= len(lines):
+                raise ValueError(f"Bloc {kind} non ferme")
+            index += 1
+            admonition_count += 1
+            body = "\n".join(body_lines)
+            output.append(
+                render_html_admonition(kind, body, document_id, admonition_count)
+                if html_mode
+                else render_pdf_admonition(kind, body)
+            )
+            continue
+        code_fence = CODE_FENCE.match(line)
+        if code_fence:
+            language = code_fence.group("language").lower()
+            code_block_count += 1
+            index += 1
+            code_lines = []
+            while index < len(lines) and not CODE_FENCE_END.match(lines[index]):
+                code_lines.append(lines[index])
+                index += 1
+            if index >= len(lines):
+                raise ValueError("Bloc de code C non ferme")
+            index += 1
+            code_source = "\n".join(code_lines) + "\n"
+            if not html_mode:
+                output.append(f"```{language}")
+                output.extend(code_lines)
+                output.append("```")
+            elif PLAYBACK_TYPING_ATTR_RE.search(code_fence.group("attrs") or ""):
+                code_example_count += 1
+                output.append(render_html_typing_lesson(code_source, code_example_count, language, code_block_count))
+            elif language == "c" and is_complete_c_program(code_source):
+                code_example_count += 1
+                output.append(render_html_code_example(code_source, code_example_count, code_block_count))
+            else:
+                output.append(render_html_code_block(language, code_lines, code_block_count))
+            continue
+        if QUIZ_START.match(line):
+            block, index = collect_div_block(lines, index)
+            quiz_count += 1
+            if html_mode:
+                output.append(render_html_quiz(parse_quiz(block, f"quiz-{quiz_count}")))
+            continue
+        match = DIRECTIVE.match(line)
+        if match:
+            kind = match.group(1)
+            path_text = match.group(2)
+            output.append(render_html_player(kind, path_text) if html_mode else render_pdf_block(kind, path_text))
+        else:
+            output.append(line)
+        index += 1
+    return "\n".join(output) + "\n"
+
+
+def run_pandoc(markdown, output_path, html_mode, title=None):
+    tmp = output_path.with_suffix(".tmp.md")
+    write_text(tmp, markdown)
+    if html_mode:
+        command = [
+            "pandoc",
+            "-s",
+            str(tmp),
+            "--metadata",
+            f"title={title or output_path.stem}",
+            "--css",
+            "vendor/bootstrap/bootstrap.min.css",
+            "--css",
+            "vendor/codemirror/codemirror.min.css",
+            "--css",
+            "vendor/codemirror/material-darker.min.css",
+            "--css",
+            "player/c-player.css",
+        ]
+        if TSCC_RUNTIME.exists():
+            command.extend(["--include-after-body", str(TSCC_INCLUDE)])
+        command.extend(
+            [
+                "--include-after-body",
+                str(PLAYER_DST / "c-runtime-adapter.js"),
+                "--include-after-body",
+                str(CODEMIRROR_INCLUDE),
+                "--include-after-body",
+                str(PLAYER_DST / "messages.js"),
+                "--include-after-body",
+                str(PLAYER_DST / "local-run-modal.js"),
+                "--include-after-body",
+                str(PLAYER_DST / "c-player.js"),
+                "--include-after-body",
+                str(PLAYER_DST / "c-typing-player.js"),
+                "--include-after-body",
+                str(PLAYER_DST / "quiz-player.js"),
+                "--include-after-body",
+                str(PLAYER_DST / "site-theme.js"),
+                "--include-after-body",
+                str(PLAYER_DST / "exercise-progress.js"),
+                "--include-after-body",
+                str(PLAYER_DST / "todo-player.js"),
+                "--include-after-body",
+                str(PLAYER_DST / "ntfy-chat.js"),
+                "-o",
+                str(output_path),
+            ]
+        )
+        subprocess.run(command, check=True, cwd=BUILD)
+    else:
+        command = ["pandoc", str(tmp)]
+        if PDF_FOOTER_TEX.exists():
+            command.extend(["--include-in-header", str(PDF_FOOTER_TEX)])
+        command.extend(["-o", str(output_path)])
+        subprocess.run(command, check=True, cwd=BUILD)
+    tmp.unlink(missing_ok=True)
+
+
+def extract_body(document):
+    match = BODY_RE.search(document)
+    if not match:
+        return document
+    return match.group("body").strip()
+
+
+def replace_body(document, body):
+    return BODY_RE.sub(lambda _match: f"<body>\n{body}\n</body>", document)
+
+
+def page_navigation_items(body):
+    items = []
+    for match in NAVIGATION_RE.finditer(body):
+        if match.group("heading_level"):
+            level = match.group("heading_level")
+            heading_id = match.group("heading_id")
+            content = match.group("heading_content")
+            if heading_id == "ntfy-chat-group-title":
+                continue
+            items.append({"type": "course", "level": int(level), "id": heading_id, "title": strip_tags(content)})
+        else:
+            items.append(
+                {
+                    "type": match.group("nav_kind"),
+                    "level": 2,
+                    "id": match.group("nav_id"),
+                    "title": html.unescape(match.group("nav_title")),
+                }
+            )
+    return items
+
+
+def is_exercise_proposals_title(title):
+    normalized = unicodedata.normalize("NFKD", strip_tags(title))
+    normalized = "".join(char for char in normalized if not unicodedata.combining(char))
+    return normalized.lower().strip() in {
+        "exercice propose",
+        "exercices propose",
+        "exercice proposes",
+        "exercices proposes",
+    }
+
+
+def render_exercise_proposals(body, scope):
+    def replace(match):
+        if not is_exercise_proposals_title(match.group("title")):
+            return match.group(0)
+        heading_id = match.group("id")
+        items = LIST_ITEM_RE.findall(match.group("items"))
+        if not items:
+            return match.group(0)
+        rendered_items = []
+        for index, item in enumerate(items, start=1):
+            checkbox_id = f"exercise-progress-{heading_id}-{index}"
+            progress_key = f"{scope}:{heading_id}:{index}"
+            rendered_items.append(
+                f'<li class="list-group-item px-0 py-2"><div class="form-check mb-0">'
+                f'<input class="form-check-input" type="checkbox" id="{html.escape(checkbox_id, quote=True)}" data-exercise-progress="{html.escape(progress_key, quote=True)}">'
+                f'<label class="form-check-label" for="{html.escape(checkbox_id, quote=True)}">{item.strip()}</label>'
+                f"</div></li>"
+            )
+        heading = match.group(0).split("</h2>", 1)[0]
+        return f'''<section class="exercise-proposals mb-4" data-exercise-progress-list>
+{heading}</h2>
+<div class="small text-body-secondary mb-2"><span data-exercise-progress-count>0/{len(items)} realise</span></div>
+<ul class="list-group list-group-flush">{''.join(rendered_items)}</ul>
+</section>'''
+
+    return EXERCISE_PROPOSALS_RE.sub(replace, body)
+
+
+def main_nav(active, include_admin=False):
+    items = [
+        ("index.html", "Accueil", active == "home"),
+        (COURSE_INDEX, "Cours", active == "course"),
+        ("exercices.html", "Exercices", active == "exercises"),
+        (PROJECT_PDF, "Projet", False),
+        (QUIZ_INDEX, "Quiz", active == "quiz"),
+        (FULL_PDF, "PDF", False),
+        (PUBLIC_REPO, "Depot", False),
+    ]
+    links = []
+    for href, label, is_active in items:
+        active_class = " active" if is_active else ""
+        aria = ' aria-current="page"' if is_active else ""
+        links.append(f'<li class="nav-item"><a class="nav-link{active_class}"{aria} href="{href}">{label}</a></li>')
+    if include_admin:
+        active_class = " active" if active == "admin" else ""
+        aria = ' aria-current="page"' if active == "admin" else ""
+        links.append(f'<li class="nav-item"><a class="nav-link{active_class}"{aria} href="{ADMIN_PAGE}">Admin</a></li>')
+    return f"""
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark sticky-top">
+  <div class="container-fluid">
+    <a class="navbar-brand" href="index.html">BUT INFO S3 SAE-C</a>
+    <div class="navbar-nav-scroll">
+      <ul class="navbar-nav flex-row gap-3">
+        {''.join(links)}
+      </ul>
+    </div>
+    <button class="btn btn-outline-light btn-sm ms-auto" type="button" data-theme-toggle aria-pressed="false">Mode sombre</button>
+  </div>
+</nav>
+"""
+
+
+def left_sidebar(courses, current):
+    links = []
+    for course in courses:
+        active = " active" if course["html"] == current else ""
+        session_icon = SESSION_ICON if course["stem"].startswith("seance-") else ""
+        links.append(
+            f'<li class="nav-item"><a class="nav-link{active}" href="{course["html"]}">{nav_icon(session_icon)}{html.escape(course["title"])}</a></li>'
+        )
+    links.append('<li class="nav-sidebar-label text-uppercase small text-body-secondary mt-3 mb-1">Jalons autonomes</li>')
+    for milestone in milestone_infos():
+        links.append(
+            f'<li class="nav-item"><a class="nav-link small" href="{MILESTONES_PAGE}#{milestone["id"]}">{nav_icon(MILESTONE_ICON)}{html.escape(milestone["title"])}</a></li>'
+        )
+    return f"""
+<aside class="course-sidebar-left col-lg-2">
+  <nav class="position-sticky pt-3">
+    <div class="fw-semibold text-uppercase small text-body-secondary mb-2">Parcours</div>
+    <ul class="nav nav-pills flex-column gap-1">
+      {''.join(links)}
+    </ul>
+  </nav>
+</aside>
+"""
+
+
+def nav_icon(icon):
+    if not icon:
+        return ""
+    return f'<span class="nav-kind-icon" aria-hidden="true">{icon}</span>'
+
+
+def right_sidebar(items):
+    links = []
+    icons = {"exercise": EXERCISE_ICON, "quiz": QUIZ_ICON}
+    for item in items:
+        classes = ["nav-link", "py-1"]
+        if item["type"] == "course" and item["level"] == 2:
+            classes.extend(["ps-3", "nav-page-section"])
+        elif item["level"] == 2:
+            classes.extend(["ps-4", "nav-page-interactive"])
+        links.append(
+            f'<li class="nav-item"><a class="{" ".join(classes)}" href="#{item["id"]}">{nav_icon(icons.get(item["type"], ""))}{html.escape(item["title"])}</a></li>'
+        )
+    return f"""
+<aside class="course-sidebar-right col-lg-2">
+  <nav class="position-sticky pt-3">
+    <div class="fw-semibold text-uppercase small text-body-secondary mb-2">Dans cette page</div>
+    <ul class="nav nav-pills flex-column gap-1 small">
+      {''.join(links)}
+    </ul>
+  </nav>
+</aside>
+"""
+
+
+def doc_layout(body, courses, current, active, pdf_href=None, zip_href=None):
+    navigation_items = page_navigation_items(body)
+    actions = []
+    if pdf_href:
+        actions.append(f'<a class="btn btn-outline-secondary btn-sm" href="{pdf_href}" download>Telecharger le PDF de cette page</a>')
+    if zip_href:
+        actions.append(f'<a class="btn btn-outline-secondary btn-sm" href="{zip_href}" download>Telecharger les starter codes</a>')
+    action_block = ""
+    if actions:
+        action_block = f'<p class="page-actions">{"".join(actions)}</p>'
+    return f"""
+{main_nav(active)}
+<div class="container-fluid">
+  <div class="row course-layout">
+    {left_sidebar(courses, current)}
+    <main class="course-content col-lg-8 py-4">
+      {action_block}
+      {body}
+    </main>
+    {right_sidebar(navigation_items)}
+  </div>
+</div>
+{site_footer()}
+"""
+
+
+def postprocess_doc_page(output_path, courses, current, active, pdf_href=None, zip_href=None):
+    document = read_text(output_path)
+    body = render_exercise_proposals(TITLE_BLOCK_RE.sub("", extract_body(document)).strip(), output_path.stem)
+    write_text(output_path, replace_body(document, doc_layout(body, courses, current, active, pdf_href, zip_href)))
+
+
+def landing_page():
+    return f"""<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BUT INFO S3 SAE-C</title>
+  <link rel="stylesheet" href="vendor/bootstrap/bootstrap.min.css">
+{codemirror_css_links()}
+  <link rel="stylesheet" href="player/c-player.css">
+  <script>
+    document.documentElement.setAttribute("data-bs-theme", localStorage.getItem("sae-c.theme.v1") || "light");
+  </script>
+</head>
+<body class="landing-page">
+{main_nav("home")}
+<main>
+  <section class="landing-hero">
+    <canvas class="landing-hero__canvas" id="landing-hero-canvas" aria-hidden="true"></canvas>
+    <div class="container landing-hero__content">
+      <p class="landing-hero__eyebrow">Programmation C pour la programmation systeme</p>
+      <h1 class="landing-hero__title">BUT INFO S3 SAE-C</h1>
+      <p class="landing-hero__lead">Supports de cours, exercices interactifs et PDF pour demarrer le C avant la programmation systeme.</p>
+      <div class="d-flex flex-wrap gap-3 mt-4">
+        <a class="btn btn-primary btn-lg" href="{COURSE_INDEX}">Voir le cours</a>
+        <a class="btn btn-primary btn-lg" href="{PUBLIC_REPO}">Cloner le depot</a>
+        <a class="btn btn-secondary btn-lg" href="{FULL_PDF}" download>Telecharger le PDF</a>
+      </div>
+    </div>
+  </section>
+  <section class="container landing-next py-4">
+    <div class="row g-3">
+      <div class="col-md-4"><a class="landing-next__item" href="{COURSE_INDEX}">Documentation en ligne</a></div>
+      <div class="col-md-4"><a class="landing-next__item" href="exercices.html">Tous les exercices</a></div>
+      <div class="col-md-4"><a class="landing-next__item" href="{QUIZ_INDEX}">Mini-quiz</a></div>
+    </div>
+  </section>
+</main>
+{site_footer()}
+<script>
+(() => {{
+  const canvas = document.getElementById("landing-hero-canvas");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  const snippets = [
+    "int main(void) {{",
+    "  printf(\\"SAE-C\\\\n\\");",
+    "  return 0;",
+    "}}",
+    "gcc -Wall -Wextra main.c",
+    "make test",
+    "valgrind ./programme",
+    "struct Etudiant {{ int note; }};",
+    "int *p = &value;",
+  ];
+  let width = 0;
+  let height = 0;
+  const particles = Array.from({{ length: 56 }}, (_, index) => ({{
+    x: Math.random(),
+    y: Math.random(),
+    speed: 0.12 + Math.random() * 0.28,
+    text: snippets[index % snippets.length],
+    color: ["#f2c94c", "#56c2a8", "#e06c5f", "#f8f9fa"][index % 4],
+  }}));
+
+  function resize() {{
+    const ratio = window.devicePixelRatio || 1;
+    width = canvas.clientWidth;
+    height = canvas.clientHeight;
+    canvas.width = Math.floor(width * ratio);
+    canvas.height = Math.floor(height * ratio);
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  }}
+
+  function draw() {{
+    ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = "#10100f";
+    ctx.fillRect(0, 0, width, height);
+    ctx.globalAlpha = 0.18;
+    ctx.strokeStyle = "#f8f9fa";
+    for (let x = 0; x < width; x += 72) {{
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, height);
+      ctx.stroke();
+    }}
+    for (let y = 0; y < height; y += 72) {{
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(width, y);
+      ctx.stroke();
+    }}
+    ctx.globalAlpha = 0.82;
+    ctx.font = "14px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+    particles.forEach((particle, index) => {{
+      particle.x -= particle.speed / Math.max(width, 1);
+      if (particle.x < -0.35) {{
+        particle.x = 1.05;
+        particle.y = Math.random();
+      }}
+      ctx.fillStyle = particle.color;
+      ctx.fillText(particle.text, particle.x * width, particle.y * height + (index % 5) * 6);
+    }});
+    ctx.globalAlpha = 1;
+    requestAnimationFrame(draw);
+  }}
+
+  resize();
+  window.addEventListener("resize", resize);
+  draw();
+}})();
+</script>
+{tscc_script_tag()}
+{codemirror_script_tags()}
+{read_text(PLAYER_SRC / "messages.js")}
+{read_text(PLAYER_SRC / "c-player.js")}
+{read_text(PLAYER_SRC / "site-theme.js")}
+{read_text(PLAYER_SRC / "ntfy-chat.js")}
+</body>
+</html>
+"""
+
+
+def live_code_page():
+    return f"""<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Code live SAE-C</title>
+  <link rel="stylesheet" href="vendor/bootstrap/bootstrap.min.css">
+{codemirror_css_links()}
+  <link rel="stylesheet" href="player/c-player.css">
+  <script>
+    document.documentElement.setAttribute("data-bs-theme", localStorage.getItem("sae-c.theme.v1") || "light");
+  </script>
+</head>
+<body class="live-page">
+{main_nav("course")}
+<main class="container-fluid py-3 live-page__main">
+  <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+    <div>
+      <h1 class="h3 mb-0" data-live-title>Code live</h1>
+      <p class="text-body-secondary mb-0">Code envoye par l'enseignant via ntfy.</p>
+    </div>
+    <a class="btn btn-outline-secondary" href="{COURSE_INDEX}">Retour au cours</a>
+  </div>
+  <div data-live-code-target></div>
+</main>
+{site_footer()}
+{tscc_script_tag()}
+{codemirror_script_tags()}
+{read_text(PLAYER_SRC / "messages.js")}
+{read_text(PLAYER_SRC / "c-player.js")}
+{read_text(PLAYER_SRC / "site-theme.js")}
+<script>
+(() => {{
+  const target = document.querySelector("[data-live-code-target]");
+  const title = document.querySelector("[data-live-title]");
+  function encodeData(value) {{
+    const json = JSON.stringify(value);
+    const bytes = new TextEncoder().encode(json);
+    let binary = "";
+    for (const byte of bytes) binary += String.fromCharCode(byte);
+    return btoa(binary);
+  }}
+  function readPayload() {{
+    try {{
+      return JSON.parse(localStorage.getItem("sae-c.live.code") || sessionStorage.getItem("sae-c.live.code") || "null");
+    }} catch (_error) {{
+      return null;
+    }}
+  }}
+  const payload = readPayload();
+  if (!payload || typeof payload.source !== "string") {{
+    target.innerHTML = '<div class="alert alert-warning">Aucun code live recu pour le moment.</div>';
+    return;
+  }}
+  title.textContent = payload.title || "Code live";
+  const exercise = {{
+    id: `live-code-${{Date.now()}}`,
+    title: payload.title || "Code live",
+    statement: "",
+    sources: ["main.c"],
+    main: "main.c",
+    stdin: "",
+    expected_stdout: "",
+    expected_stderr: "",
+    path: "",
+    files: [{{ name: "main.c", content: payload.source }}],
+    browser_runnable: true,
+  }};
+  const player = document.createElement("c-player");
+  player.dataset.readonly = "false";
+  player.dataset.exerciseB64 = encodeData(exercise);
+  player.classList.add("live-code-player");
+  target.append(player);
+}})();
+</script>
+</body>
+</html>
+"""
+
+
+def live_quiz_page():
+    return f"""<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Quiz live SAE-C</title>
+  <link rel="stylesheet" href="vendor/bootstrap/bootstrap.min.css">
+{codemirror_css_links()}
+  <link rel="stylesheet" href="player/c-player.css">
+  <script>
+    document.documentElement.setAttribute("data-bs-theme", localStorage.getItem("sae-c.theme.v1") || "light");
+  </script>
+</head>
+<body class="live-page">
+{main_nav("quiz")}
+<main class="container py-4 live-quiz-page">
+  <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-4">
+    <div>
+      <h1 class="h3 mb-0" data-live-quiz-title>Quiz live</h1>
+      <p class="text-body-secondary mb-0">Reponse envoyee directement a l'enseignant.</p>
+    </div>
+    <span class="badge text-bg-secondary" data-live-username></span>
+  </div>
+  <section class="card" data-live-quiz-target></section>
+</main>
+{site_footer()}
+{read_text(PLAYER_SRC / "messages.js")}
+{read_text(PLAYER_SRC / "site-theme.js")}
+<script>
+(() => {{
+  const groupKey = "sae-c.ntfy.group";
+  const liveCodeKey = "sae-c.live.code";
+  const liveQuizKey = "sae-c.live.quiz";
+  const groups = {{
+    S3A: "https://ntfy.home.nextnet.top/BUT-INFO-S3-S3A-SAE-C/sse",
+    S3B: "https://ntfy.home.nextnet.top/BUT-INFO-S3-S3B-SAE-C/sse",
+    S3C: "https://ntfy.home.nextnet.top/BUT-INFO-S3-S3C-SAE-C/sse",
+  }};
+  let source = null;
+  const target = document.querySelector("[data-live-quiz-target]");
+  const title = document.querySelector("[data-live-quiz-title]");
+  const usernameBadge = document.querySelector("[data-live-username]");
+
+  function escape(value) {{
+    return String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+  }}
+
+  function readPayload() {{
+    try {{
+      return JSON.parse(localStorage.getItem("sae-c.live.quiz") || sessionStorage.getItem("sae-c.live.quiz") || "null");
+    }} catch (_error) {{
+      return null;
+    }}
+  }}
+
+  function storedGroup() {{
+    try {{
+      const value = localStorage.getItem(groupKey);
+      return groups[value] ? value : "";
+    }} catch (_error) {{
+      return "";
+    }}
+  }}
+
+  function siteBasePath() {{
+    const brand = document.querySelector(".navbar-brand");
+    const baseUrl = brand ? new URL(brand.getAttribute("href") || ".", window.location.href) : new URL(".", window.location.href);
+    return baseUrl.pathname.replace(/[^/]*$/, "");
+  }}
+
+  function siteHref(path) {{
+    return new URL(path, new URL(siteBasePath(), window.location.href)).href;
+  }}
+
+  function localSiteUrl(message) {{
+    const trimmed = String(message || "").trim();
+    if (!/^https?:\\/\\/\\S+$/.test(trimmed)) return null;
+    try {{
+      const url = new URL(trimmed);
+      if (url.origin !== window.location.origin) return null;
+      if (!url.pathname.startsWith(siteBasePath())) return null;
+      return url;
+    }} catch (_error) {{
+      return null;
+    }}
+  }}
+
+  function storeJson(key, value) {{
+    try {{
+      localStorage.setItem(key, JSON.stringify(value));
+    }} catch (_error) {{
+      sessionStorage.setItem(key, JSON.stringify(value));
+    }}
+  }}
+
+  function parseAction(message) {{
+    try {{
+      const value = JSON.parse(message);
+      return value && value.saec === 1 && typeof value.type === "string" ? value : null;
+    }} catch (_error) {{
+      return null;
+    }}
+  }}
+
+  function handleLiveMessage(rawMessage) {{
+    const normalized = String(rawMessage || "").replaceAll("\\r", "");
+    const action = parseAction(normalized);
+    if (action?.type === "navigate" && action.url) {{
+      const targetUrl = localSiteUrl(action.url);
+      if (targetUrl) window.location.assign(targetUrl.href);
+      return;
+    }}
+    if (action?.type === "code") {{
+      storeJson(liveCodeKey, {{
+        title: action.title || "Code live",
+        source: action.source || "",
+        receivedAt: new Date().toISOString(),
+      }});
+      window.location.assign(siteHref("live-code.html"));
+      return;
+    }}
+    if (action?.type === "live_quiz" && (action.question || action.questions) && action.responseTopic) {{
+      storeJson(liveQuizKey, {{
+        id: action.id || `live-quiz-${{Date.now()}}`,
+        title: action.title || "Question live",
+        questions: action.questions || [action.question],
+        responseTopic: action.responseTopic,
+        username: usernameBadge.textContent || "anonyme",
+        receivedAt: new Date().toISOString(),
+      }});
+      window.location.assign(siteHref("live-quiz.html"));
+      return;
+    }}
+    const targetUrl = localSiteUrl(normalized);
+    if (targetUrl) {{
+      window.location.assign(targetUrl.href);
+    }}
+  }}
+
+  function connectGroupTopic() {{
+    const group = storedGroup();
+    if (!group || !window.EventSource) return;
+    source = new EventSource(groups[group]);
+    source.onmessage = (event) => {{
+      try {{
+        const payload = JSON.parse(event.data);
+        if (payload.event === "message") handleLiveMessage(payload.message);
+      }} catch (_error) {{
+        handleLiveMessage(event.data);
+      }}
+    }};
+  }}
+
+  function render(payload) {{
+    const questions = payload.questions || (payload.question ? [payload.question] : []);
+    title.textContent = payload.title || "Quiz live";
+    usernameBadge.textContent = payload.username || "anonyme";
+    target.innerHTML = `
+      <div class="card-header fw-semibold">${{escape(payload.title || "Quiz live")}}</div>
+      <div class="card-body">
+        ${{questions.map((question, index) => `
+          <fieldset data-live-question-id="${{escape(question.id)}}" class="mb-4">
+            <legend class="h5">${{index + 1}}. ${{escape(question.title || "Question")}}</legend>
+            ${{question.description ? `<p class="text-body-secondary">${{escape(question.description)}}</p>` : ""}}
+            ${{(question.options || []).map((option) => `
+              <label class="form-check live-quiz-option">
+                <input class="form-check-input" type="checkbox" value="${{escape(option.id)}}">
+                <span class="form-check-label">${{escape(option.text)}}</span>
+              </label>
+            `).join("")}}
+          </fieldset>
+        `).join("")}}
+        <button class="btn btn-primary mt-3" type="button" data-submit-live-quiz>Envoyer la reponse</button>
+        <div class="mt-3" data-live-quiz-feedback></div>
+      </div>
+    `;
+    target.querySelector("[data-submit-live-quiz]").addEventListener("click", () => submit(payload));
+  }}
+
+  async function submit(payload) {{
+    const answers = Array.from(target.querySelectorAll("[data-live-question-id]"), (fieldset) => ({{
+      questionId: fieldset.dataset.liveQuestionId,
+      selected: Array.from(fieldset.querySelectorAll("input:checked"), (input) => input.value),
+    }}));
+    const feedback = target.querySelector("[data-live-quiz-feedback]");
+    const response = {{
+      saec: 1,
+      type: "quiz_response",
+      quizId: payload.id,
+      username: payload.username || "anonyme",
+      answers,
+      answeredAt: new Date().toISOString(),
+    }};
+    try {{
+      const result = await fetch(payload.responseTopic, {{
+        method: "POST",
+        body: JSON.stringify(response),
+      }});
+      if (!result.ok) throw new Error(`HTTP ${{result.status}}`);
+      feedback.innerHTML = '<div class="alert alert-success mb-0">Reponse envoyee.</div>';
+      target.querySelector("[data-submit-live-quiz]").disabled = true;
+    }} catch (error) {{
+      feedback.innerHTML = `<div class="alert alert-danger mb-0">Echec de l'envoi : ${{escape(error.message)}}</div>`;
+    }}
+  }}
+
+  const payload = readPayload();
+  if (!payload || !(payload.question || payload.questions?.length) || !payload.responseTopic) {{
+    target.innerHTML = '<div class="card-body"><div class="alert alert-warning mb-0">Aucune question live recue pour le moment.</div></div>';
+    connectGroupTopic();
+    return;
+  }}
+  render(payload);
+  connectGroupTopic();
+}})();
+</script>
+</body>
+</html>
+"""
+
+
+def admin_page(flow_items, question_bank):
+    section_rows = []
+    for index, item in enumerate(flow_items):
+        if item["type"] == "section":
+            level_class = "admin-section__title--h2" if item["level"] == 2 else ""
+            section_rows.append(
+                f"""
+<article class="admin-section list-group-item">
+  <div>
+    <div class="admin-section__course">{html.escape(item["course_title"])}</div>
+    <div class="admin-section__title {level_class}">{html.escape(item["title"])}</div>
+  </div>
+  <button class="btn btn-primary btn-sm" type="button" data-flow-index="{index}">Envoyer</button>
+</article>
+"""
+            )
+        elif item["type"] == "question":
+            section_rows.append(
+                f"""
+<article class="admin-section admin-section--question list-group-item">
+  <div>
+    <div class="admin-section__course">{html.escape(item["course_title"])} - {html.escape(item["quiz_title"])}</div>
+    <div class="admin-section__title admin-section__title--h2">Question - {html.escape(item["title"])}</div>
+  </div>
+  <button class="btn btn-secondary btn-sm" type="button" data-flow-index="{index}">Poser</button>
+</article>
+"""
+            )
+        else:
+            content_labels = {
+                "admonition": "Encadré",
+                "exercise": "Exercice",
+                "code": "Code",
+                "guided-reading": "Lecture guidée",
+            }
+            content_label = content_labels.get(item["content_kind"], "Contenu")
+            section_rows.append(
+                f"""
+<article class="admin-section list-group-item">
+  <div>
+    <div class="admin-section__course">{html.escape(item["course_title"])} - {content_label}</div>
+    <div class="admin-section__title admin-section__title--h2">{html.escape(item["title"])}</div>
+  </div>
+  <button class="btn btn-outline-primary btn-sm" type="button" data-flow-index="{index}">Envoyer</button>
+</article>
+"""
+            )
+    question_bank_b64 = encode_data(question_bank)
+    flow_b64 = encode_data(flow_items)
+    return f"""<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Admin SAE-C</title>
+  <link rel="stylesheet" href="vendor/bootstrap/bootstrap.min.css">
+{codemirror_css_links()}
+  <link rel="stylesheet" href="player/c-player.css">
+  <script>
+    document.documentElement.setAttribute("data-bs-theme", localStorage.getItem("sae-c.theme.v1") || "light");
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/argon2-browser@1.18.0/dist/argon2-bundled.min.js"></script>
+</head>
+<body>
+{main_nav("admin", include_admin=True)}
+<section class="container py-4 admin-auth" data-admin-auth>
+  <div class="card mx-auto" style="max-width: 32rem;">
+    <div class="card-header fw-semibold">Authentification admin</div>
+    <div class="card-body">
+      <label class="form-label" for="admin-password">Mot de passe</label>
+      <input class="form-control" id="admin-password" type="password" data-admin-password autocomplete="current-password">
+      <button class="btn btn-primary mt-3" type="button" data-admin-login>Entrer</button>
+      <div class="mt-3" data-admin-auth-feedback></div>
+    </div>
+  </div>
+</section>
+<main class="container py-4 admin-page" data-admin-app hidden>
+  <div class="d-flex flex-wrap align-items-end justify-content-between gap-3 mb-4">
+    <div>
+      <h1>Admin SAE-C</h1>
+      <p class="text-body-secondary mb-0">Envoyer une navigation, du code C ou un message aux etudiants connectes.</p>
+    </div>
+    <label class="admin-group">
+      <span class="form-label fw-semibold">Groupe</span>
+      <select class="form-select" data-admin-group>
+        <option value="S3A">A</option>
+        <option value="S3B">B</option>
+        <option value="S3C">C</option>
+      </select>
+    </label>
+  </div>
+
+  <section class="admin-mirror mb-4">
+    <div class="admin-mirror__preview card">
+      <div class="card-header d-flex flex-wrap align-items-center justify-content-between gap-2">
+        <div>
+          <div class="fw-semibold" data-preview-title>Parcours du cours</div>
+          <div class="text-body-secondary small" data-preview-subtitle>Selectionner une section ou une question.</div>
+        </div>
+      </div>
+      <div class="admin-preview" data-admin-preview>
+        <iframe class="admin-preview__frame" data-admin-preview-frame title="Preview du cours"></iframe>
+        <div class="admin-mirror__nav">
+          <button class="btn btn-outline-secondary" type="button" data-flow-prev>Precedent</button>
+          <button class="btn btn-primary" type="button" data-flow-current>Envoyer l'element courant</button>
+          <button class="btn btn-outline-secondary" type="button" data-flow-next>Suivant</button>
+          <button class="btn btn-outline-secondary" type="button" data-preview-fullscreen>Plein ecran</button>
+        </div>
+      </div>
+    </div>
+    <aside class="admin-mirror__side">
+      <section class="card admin-chat">
+        <div class="card-header fw-semibold">Chat ntfy admin</div>
+        <div class="admin-chat__messages" data-admin-chat-messages></div>
+        <div class="card-body border-top">
+          <label class="form-label" for="admin-chat-input">Message au groupe</label>
+          <textarea class="form-control" id="admin-chat-input" data-admin-chat-input rows="3"></textarea>
+          <button class="btn btn-primary btn-sm mt-2" type="button" data-admin-chat-send>Envoyer</button>
+        </div>
+      </section>
+    </aside>
+  </section>
+
+  <section class="card mb-4">
+    <div class="card-header fw-semibold">Message libre</div>
+    <div class="card-body">
+      <label class="form-label" for="admin-message">Texte ou code C</label>
+      <textarea class="form-control admin-message" id="admin-message" data-admin-message rows="12"></textarea>
+      <div class="d-flex flex-wrap gap-2 mt-3">
+        <button class="btn btn-primary" type="button" data-send-text>Envoyer comme texte</button>
+        <button class="btn btn-secondary" type="button" data-send-code>Envoyer comme code C plein ecran</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="card mb-4">
+    <div class="card-header fw-semibold">Quiz live</div>
+    <div class="card-body">
+      <label class="form-label" for="admin-question-bank">Question de la banque</label>
+      <select class="form-select" id="admin-question-bank" data-question-bank></select>
+      <label class="form-label mt-3" for="admin-question-json">Question JSON</label>
+      <textarea class="form-control admin-message" id="admin-question-json" data-question-json rows="10"></textarea>
+      <div class="d-flex flex-wrap gap-2 mt-3">
+        <button class="btn btn-primary" type="button" data-send-bank-question>Envoyer la question selectionnee</button>
+        <button class="btn btn-secondary" type="button" data-send-json-question>Envoyer la question JSON</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="card mb-4">
+    <div class="card-header fw-semibold">Statistiques live</div>
+    <div class="card-body">
+      <div class="row g-3">
+        <div class="col-lg-6">
+          <h2 class="h5">Session courante</h2>
+          <div data-live-session-stats class="admin-stats-box text-body-secondary">Aucune question live envoyee.</div>
+        </div>
+        <div class="col-lg-6">
+          <h2 class="h5">Leaderboard</h2>
+          <div data-live-leaderboard class="admin-stats-box text-body-secondary">Aucune reponse recue.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-header fw-semibold">Sections du cours</div>
+    <div class="list-group list-group-flush">
+      {''.join(section_rows)}
+    </div>
+  </section>
+
+  <div class="admin-status alert mt-4" data-admin-status hidden></div>
+</main>
+<div class="admin-results-modal" data-results-modal hidden>
+  <div class="admin-results-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="admin-results-title">
+    <div class="d-flex align-items-start justify-content-between gap-3 mb-3">
+      <div>
+        <h2 class="h4 mb-1" id="admin-results-title" data-results-title>Resultats</h2>
+        <div class="text-body-secondary" data-results-subtitle></div>
+      </div>
+      <button class="btn btn-outline-secondary btn-sm" type="button" data-close-results>Fermer</button>
+    </div>
+    <div data-results-body></div>
+    <div class="d-flex flex-wrap gap-2 justify-content-end mt-3" data-results-actions></div>
+  </div>
+</div>
+{site_footer()}
+{read_text(PLAYER_SRC / "messages.js")}
+{read_text(PLAYER_SRC / "site-theme.js")}
+<script>
+(() => {{
+  const authDigest = "{ADMIN_DIGEST}";
+  const authKey = "sae-c.admin.auth.v1";
+  const statsKey = "sae-c.admin.liveStats.v1";
+  const flowIndexKey = "sae-c.admin.activeFlowIndex.v1";
+  const questionBank = JSON.parse(new TextDecoder("utf-8").decode(Uint8Array.from(atob("{question_bank_b64}"), (char) => char.charCodeAt(0))));
+  const flowItems = JSON.parse(new TextDecoder("utf-8").decode(Uint8Array.from(atob("{flow_b64}"), (char) => char.charCodeAt(0))));
+  const topics = {{
+    S3A: "https://ntfy.home.nextnet.top/BUT-INFO-S3-S3A-SAE-C",
+    S3B: "https://ntfy.home.nextnet.top/BUT-INFO-S3-S3B-SAE-C",
+    S3C: "https://ntfy.home.nextnet.top/BUT-INFO-S3-S3C-SAE-C",
+  }};
+  const adminTopics = {{
+    S3A: "https://ntfy.home.nextnet.top/BUT-INFO-S3-S3A-SAE-C-admin",
+    S3B: "https://ntfy.home.nextnet.top/BUT-INFO-S3-S3B-SAE-C-admin",
+    S3C: "https://ntfy.home.nextnet.top/BUT-INFO-S3-S3C-SAE-C-admin",
+  }};
+  let responseSource = null;
+  let chatSource = null;
+  let activeQuiz = readActiveQuiz();
+  let activeFlowIndex = readActiveFlowIndex();
+  const groupSelect = document.querySelector("[data-admin-group]");
+  const messageInput = document.querySelector("[data-admin-message]");
+  const questionSelect = document.querySelector("[data-question-bank]");
+  const questionJson = document.querySelector("[data-question-json]");
+  const status = document.querySelector("[data-admin-status]");
+  const authPanel = document.querySelector("[data-admin-auth]");
+  const appPanel = document.querySelector("[data-admin-app]");
+  const authFeedback = document.querySelector("[data-admin-auth-feedback]");
+  const resultsModal = document.querySelector("[data-results-modal]");
+  const resultsTitle = document.querySelector("[data-results-title]");
+  const resultsSubtitle = document.querySelector("[data-results-subtitle]");
+  const resultsBody = document.querySelector("[data-results-body]");
+  const resultsActions = document.querySelector("[data-results-actions]");
+  const preview = document.querySelector("[data-admin-preview]");
+  const previewContainer = document.querySelector(".admin-mirror__preview");
+  const resultsModalHome = resultsModal.parentNode;
+  const resultsModalAnchor = document.createComment("admin-results-modal-home");
+  const previewFrame = document.querySelector("[data-admin-preview-frame]");
+  const previewTitle = document.querySelector("[data-preview-title]");
+  const previewSubtitle = document.querySelector("[data-preview-subtitle]");
+  const chatMessages = document.querySelector("[data-admin-chat-messages]");
+  const chatInput = document.querySelector("[data-admin-chat-input]");
+
+  resultsModalHome.insertBefore(resultsModalAnchor, resultsModal);
+
+  function setStatus(kind, message) {{
+    status.hidden = false;
+    status.className = `admin-status alert mt-4 alert-${{kind}}`;
+    status.textContent = message;
+  }}
+
+  function setAuthFeedback(kind, message) {{
+    authFeedback.innerHTML = `<div class="alert alert-${{kind}} mb-0">${{escape(message)}}</div>`;
+  }}
+
+  function escape(value) {{
+    return String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+  }}
+
+  function showApp() {{
+    authPanel.hidden = true;
+    appPanel.hidden = false;
+    populateQuestions();
+    connectResponses();
+    connectAdminChat();
+    renderPreview();
+    renderStats();
+  }}
+
+  async function login() {{
+    const password = document.querySelector("[data-admin-password]").value;
+    if (!window.argon2?.verify) {{
+      setAuthFeedback("danger", "Librairie Argon2 indisponible.");
+      return;
+    }}
+    try {{
+      await window.argon2.verify({{ pass: password, encoded: authDigest }});
+      sessionStorage.setItem(authKey, "true");
+      showApp();
+    }} catch (_error) {{
+      setAuthFeedback("danger", "Mot de passe incorrect.");
+    }}
+  }}
+
+  document.querySelector("[data-admin-login]").addEventListener("click", login);
+  document.querySelector("[data-admin-password]").addEventListener("keydown", (event) => {{
+    if (event.key === "Enter") login();
+  }});
+
+  function currentTopic() {{
+    return topics[groupSelect.value];
+  }}
+
+  function currentAdminTopic() {{
+    return adminTopics[groupSelect.value];
+  }}
+
+  function currentSseTopic() {{
+    return `${{currentTopic()}}/sse`;
+  }}
+
+  function currentFlowItem() {{
+    return activeFlowIndex === null ? null : flowItems[activeFlowIndex] || null;
+  }}
+
+  function nearestSectionIndex(index) {{
+    for (let cursor = index; cursor >= 0; cursor -= 1) {{
+      if (flowItems[cursor]?.type === "section") return cursor;
+    }}
+    return flowItems.findIndex((item) => item.type === "section");
+  }}
+
+  function renderPreview() {{
+    const item = currentFlowItem();
+    if (!item) {{
+      previewTitle.textContent = "Accueil";
+      previewSubtitle.textContent = "Page d'accueil du site.";
+      if (!previewFrame.getAttribute("src")) {{
+        previewFrame.src = "index.html";
+      }}
+      return;
+    }}
+    const sectionIndex = item.type === "section" ? activeFlowIndex : nearestSectionIndex(activeFlowIndex);
+    const section = flowItems[sectionIndex];
+    const previewItem = item.type === "content" ? item : section;
+    previewTitle.textContent = item.type === "question" ? `Question - ${{item.title}}` : item.title;
+    previewSubtitle.textContent = item.type === "question" ? `${{item.course_title}} - ${{item.quiz_title}}` : item.course_title;
+    if (!previewItem?.href) {{
+      previewFrame.removeAttribute("src");
+      return;
+    }}
+    previewFrame.src = previewItem.href;
+  }}
+
+  function revealPreviewPlayer() {{
+    try {{
+      const previewDocument = previewFrame.contentDocument;
+      const hash = previewFrame.contentWindow?.location.hash || "";
+      if (!previewDocument || !hash) return;
+      const target = previewDocument.getElementById(decodeURIComponent(hash.slice(1)));
+      if (!target) return;
+
+      let player = target.matches("c-player") ? target : target.querySelector("c-player");
+      let sibling = target.nextElementSibling;
+      while (!player && sibling && !sibling.matches("h1, h2")) {{
+        player = sibling.matches("c-player") ? sibling : sibling.querySelector("c-player");
+        sibling = sibling.nextElementSibling;
+      }}
+      const exercise = player?.closest("details.embedded-exercise");
+      if (exercise) exercise.open = true;
+      target.scrollIntoView({{ block: "start" }});
+    }} catch (_error) {{
+      // The preview may be unavailable while its page is being replaced.
+    }}
+  }}
+
+  function isLocalPreviewUrl(url) {{
+    const siteRoot = new URL(".", window.location.href);
+    return url.origin === window.location.origin && url.pathname.startsWith(siteRoot.pathname);
+  }}
+
+  function quizAtPreviewUrl(url) {{
+    try {{
+      const previewWindow = previewFrame.contentWindow;
+      const previewDocument = previewFrame.contentDocument;
+      const currentUrl = new URL(previewWindow.location.href);
+      if (!previewDocument || !url.hash || url.origin !== currentUrl.origin ||
+          url.pathname !== currentUrl.pathname || url.search !== currentUrl.search) {{
+        return null;
+      }}
+      const target = previewDocument.getElementById(decodeURIComponent(url.hash.slice(1)));
+      const player = target?.matches("quiz-player") ? target : target?.closest("quiz-player");
+      if (!player?.dataset.quizB64) return null;
+
+      const bytes = Uint8Array.from(atob(player.dataset.quizB64), (char) => char.charCodeAt(0));
+      return JSON.parse(new TextDecoder("utf-8").decode(bytes));
+    }} catch (_error) {{
+      return null;
+    }}
+  }}
+
+  function sendPreviewLink(url, quiz) {{
+    if (quiz) {{
+      if (!Array.isArray(quiz.questions) || quiz.questions.length === 0) {{
+        setStatus("warning", "Le quiz selectionne ne contient aucune question.");
+        return;
+      }}
+      startLiveQuiz(quiz);
+      return;
+    }}
+    publish(action("navigate", {{ url: url.href }}));
+  }}
+
+  function bindPreviewLinks() {{
+    try {{
+      const previewDocument = previewFrame.contentDocument;
+      if (!previewDocument || previewDocument.documentElement.dataset.adminLinksBound === "true") return;
+      previewDocument.documentElement.dataset.adminLinksBound = "true";
+      previewDocument.addEventListener("click", (event) => {{
+        if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        const link = event.target.closest("a[href]");
+        if (!link || link.target === "_blank" || link.hasAttribute("download")) return;
+        const url = new URL(link.href, previewFrame.contentWindow.location.href);
+        if (!isLocalPreviewUrl(url)) return;
+
+        const quiz = quizAtPreviewUrl(url);
+        if (quiz) {{
+          event.preventDefault();
+          previewFrame.src = url.href;
+        }}
+        sendPreviewLink(url, quiz);
+      }});
+    }} catch (_error) {{
+      // A preview outside the site cannot be inspected or synchronized.
+    }}
+  }}
+
+  function updateFullscreenButton() {{
+    const button = document.querySelector("[data-preview-fullscreen]");
+    const active = document.fullscreenElement === previewContainer;
+    syncResultsModalFullscreen(active);
+    button.textContent = active ? "Quitter plein ecran" : "Plein ecran";
+  }}
+
+  function syncResultsModalFullscreen(isPreviewFullscreen = document.fullscreenElement === previewContainer) {{
+    if (isPreviewFullscreen && resultsModal.parentNode !== previewContainer) {{
+      previewContainer.append(resultsModal);
+      return;
+    }}
+    if (!isPreviewFullscreen && resultsModal.parentNode !== resultsModalHome) {{
+      resultsModalAnchor.after(resultsModal);
+    }}
+  }}
+
+  async function togglePreviewFullscreen() {{
+    if (!previewContainer.requestFullscreen) {{
+      setStatus("warning", "Le mode plein ecran n'est pas disponible dans ce navigateur.");
+      return;
+    }}
+    try {{
+      if (document.fullscreenElement === previewContainer) {{
+        await document.exitFullscreen();
+      }} else {{
+        await previewContainer.requestFullscreen();
+      }}
+      updateFullscreenButton();
+    }} catch (error) {{
+      setStatus("danger", `Impossible de changer le mode plein ecran : ${{error.message}}`);
+    }}
+  }}
+
+  async function publish(message) {{
+    const topic = currentTopic();
+    if (!topic) {{
+      setStatus("warning", "Choisir un groupe.");
+      return;
+    }}
+    try {{
+      const response = await fetch(topic, {{
+        method: "POST",
+        body: message,
+      }});
+      if (!response.ok) {{
+        throw new Error(`HTTP ${{response.status}}`);
+      }}
+      setStatus("success", `Notification envoyee au groupe ${{groupSelect.options[groupSelect.selectedIndex].text}}.`);
+    }} catch (error) {{
+      setStatus("danger", `Echec de l'envoi : ${{error.message}}`);
+    }}
+  }}
+
+  function appendAdminChat(message) {{
+    const entry = document.createElement("article");
+    entry.className = "admin-chat__message";
+    entry.textContent = message;
+    chatMessages.append(entry);
+    while (chatMessages.children.length > 80) {{
+      chatMessages.firstElementChild.remove();
+    }}
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+  }}
+
+  function connectAdminChat() {{
+    if (chatSource) chatSource.close();
+    if (!window.EventSource) {{
+      appendAdminChat("SSE indisponible.");
+      return;
+    }}
+    chatSource = new EventSource(currentSseTopic());
+    chatSource.onmessage = (event) => {{
+      try {{
+        const payload = JSON.parse(event.data);
+        if (payload.event === "message") appendAdminChat(payload.message || "");
+      }} catch (_error) {{
+        appendAdminChat(event.data);
+      }}
+    }};
+    chatSource.onerror = () => appendAdminChat("Connexion chat en attente de reconnexion.");
+  }}
+
+  function action(type, payload) {{
+    return JSON.stringify({{ saec: 1, type, ...payload }});
+  }}
+
+  function selectedBankQuestion() {{
+    return questionBank.find((question) => question.id === questionSelect.value) || questionBank[0];
+  }}
+
+  function populateQuestions() {{
+    questionSelect.innerHTML = questionBank.map((question) => `<option value="${{escape(question.id)}}">${{escape(question.label)}}</option>`).join("");
+    updateQuestionJson();
+  }}
+
+  function updateQuestionJson() {{
+    const question = selectedBankQuestion();
+    questionJson.value = JSON.stringify(question.question, null, 2);
+  }}
+
+  function studentQuestion(question) {{
+    return {{
+      id: question.id,
+      title: question.title,
+      description: question.description || "",
+      options: question.options.map((option) => ({{ id: option.id, text: option.text }})),
+    }};
+  }}
+
+  function normalizeQuestion(question) {{
+    if (!question.id) question.id = `live-question-${{Date.now()}}`;
+    if (!Array.isArray(question.options) || question.options.length === 0) {{
+      throw new Error("La question doit contenir des options.");
+    }}
+    if (!question.options.some((option) => option.correct === true)) {{
+      throw new Error("La question doit contenir au moins une bonne reponse.");
+    }}
+    question.options = question.options.map((option, index) => ({{
+      id: option.id || `${{question.id}}-o${{index + 1}}`,
+      text: option.text || "",
+      correct: option.correct === true,
+    }}));
+    return question;
+  }}
+
+  function normalizeQuiz(quizOrQuestion) {{
+    const candidate = JSON.parse(JSON.stringify(quizOrQuestion));
+    const questions = Array.isArray(candidate.questions) ? candidate.questions : [candidate];
+    if (questions.length === 0) {{
+      throw new Error("Le quiz doit contenir au moins une question.");
+    }}
+    return {{
+      title: candidate.title || questions[0].title || "Question live",
+      questions: questions.map(normalizeQuestion),
+    }};
+  }}
+
+  function activeQuestions() {{
+    if (!activeQuiz) return [];
+    return Array.isArray(activeQuiz.questions) ? activeQuiz.questions : [activeQuiz.question];
+  }}
+
+  function startLiveQuiz(quizOrQuestion, flowIndex = null, resultsMode = "responses") {{
+    const fullQuiz = normalizeQuiz(quizOrQuestion);
+    const quizId = `live-${{groupSelect.value}}-${{Date.now()}}`;
+    if (flowIndex !== null) {{
+      activeFlowIndex = flowIndex;
+      localStorage.setItem(flowIndexKey, String(flowIndex));
+    }}
+    renderPreview();
+    activeQuiz = {{
+      id: quizId,
+      group: groupSelect.value,
+      title: fullQuiz.title,
+      questions: fullQuiz.questions,
+      startedAt: new Date().toISOString(),
+    }};
+    localStorage.setItem("sae-c.admin.activeQuiz.v1", JSON.stringify(activeQuiz));
+    ensureSession(activeQuiz);
+    publish(action("live_quiz", {{
+      id: quizId,
+      title: activeQuiz.title,
+      questions: activeQuiz.questions.map(studentQuestion),
+      responseTopic: currentAdminTopic(),
+    }}));
+    renderStats();
+    openResultsModal(resultsMode);
+  }}
+
+  function readStats() {{
+    try {{
+      return JSON.parse(localStorage.getItem(statsKey) || '{{"sessions":{{}},"leaderboard":{{}}}}');
+    }} catch (_error) {{
+      return {{ sessions: {{}}, leaderboard: {{}} }};
+    }}
+  }}
+
+  function writeStats(stats) {{
+    localStorage.setItem(statsKey, JSON.stringify(stats));
+  }}
+
+  function readActiveQuiz() {{
+    try {{
+      return JSON.parse(localStorage.getItem("sae-c.admin.activeQuiz.v1") || "null");
+    }} catch (_error) {{
+      return null;
+    }}
+  }}
+
+  function readActiveFlowIndex() {{
+    const raw = localStorage.getItem(flowIndexKey);
+    const value = Number.parseInt(raw || "-1", 10);
+    return Number.isFinite(value) && value >= 0 ? value : null;
+  }}
+
+  function ensureSession(quiz) {{
+    const stats = readStats();
+    if (!stats.sessions[quiz.id]) {{
+      stats.sessions[quiz.id] = {{
+        id: quiz.id,
+        title: quiz.title,
+        group: quiz.group,
+        startedAt: quiz.startedAt,
+        answers: [],
+      }};
+      writeStats(stats);
+    }}
+  }}
+
+  function sameSet(left, right) {{
+    if (left.length !== right.length) return false;
+    const values = new Set(left);
+    return right.every((value) => values.has(value));
+  }}
+
+  function handleQuizResponse(response) {{
+    if (!response || response.type !== "quiz_response" || !activeQuiz || response.quizId !== activeQuiz.id) return;
+    const stats = readStats();
+    const session = stats.sessions[activeQuiz.id] || {{
+      id: activeQuiz.id,
+      title: activeQuiz.title,
+      group: activeQuiz.group,
+      startedAt: activeQuiz.startedAt,
+      answers: [],
+    }};
+    if (session.answers.some((answer) => answer.username === response.username)) {{
+      return;
+    }}
+    const answers = Array.isArray(response.answers)
+      ? response.answers
+      : [{{ questionId: activeQuestions()[0]?.id, selected: response.selected }}];
+    const correct = activeQuestions().every((question) => {{
+      const answer = answers.find((entry) => entry.questionId === question.id);
+      const expected = question.options.filter((option) => option.correct).map((option) => option.id);
+      return sameSet(Array.isArray(answer?.selected) ? answer.selected : [], expected);
+    }});
+    session.answers.push({{
+      username: response.username || "anonyme",
+      answers,
+      correct,
+      answeredAt: response.answeredAt || new Date().toISOString(),
+    }});
+    stats.sessions[activeQuiz.id] = session;
+    const user = session.answers.at(-1).username;
+    stats.leaderboard[user] = stats.leaderboard[user] || {{ username: user, score: 0, answers: 0 }};
+    stats.leaderboard[user].answers += 1;
+    if (correct) stats.leaderboard[user].score += 1;
+    writeStats(stats);
+    renderStats();
+  }}
+
+  function renderStats() {{
+    const stats = readStats();
+    const sessionBox = document.querySelector("[data-live-session-stats]");
+    const leaderboardBox = document.querySelector("[data-live-leaderboard]");
+    if (!activeQuiz || !stats.sessions[activeQuiz.id]) {{
+      sessionBox.textContent = "Aucune question live envoyee.";
+    }} else {{
+      const session = stats.sessions[activeQuiz.id];
+      const correctAnswers = session.answers.filter((answer) => answer.correct);
+      const podium = correctAnswers.slice(0, 3).map((answer, index) => `<li>${{index + 1}}. ${{escape(answer.username)}} <span class="text-body-secondary">${{escape(answer.answeredAt)}}</span></li>`).join("");
+      sessionBox.innerHTML = `
+        <p class="mb-2"><strong>${{escape(session.title)}}</strong></p>
+        <p class="mb-2">${{session.answers.length}} reponse(s), ${{correctAnswers.length}} correcte(s).</p>
+        <ol class="mb-0">${{podium || "<li>Aucune bonne reponse.</li>"}}</ol>
+      `;
+    }}
+    const leaders = Object.values(stats.leaderboard || {{}}).sort((a, b) => b.score - a.score || a.username.localeCompare(b.username));
+    leaderboardBox.innerHTML = leaders.length
+      ? `<div class="admin-leaderboard-scroll"><ol class="mb-0">${{leaders.map((user) => `<li>${{escape(user.username)}} : ${{user.score}} / ${{user.answers}}</li>`).join("")}}</ol></div>`
+      : "Aucune reponse recue.";
+    if (!resultsModal.hidden) {{
+      openResultsModal(resultsModal.dataset.mode || "responses");
+    }}
+  }}
+
+  function activeSession() {{
+    if (!activeQuiz) return null;
+    const stats = readStats();
+    return stats.sessions[activeQuiz.id] || null;
+  }}
+
+  function correctOptionsByQuestion() {{
+    return activeQuestions().map((question) => ({{
+      title: question.title,
+      labels: question.options.filter((option) => option.correct).map((option) => option.text),
+    }}));
+  }}
+
+  function leaderboardHtml() {{
+    const stats = readStats();
+    const leaders = Object.values(stats.leaderboard || {{}}).sort((a, b) => b.score - a.score || a.username.localeCompare(b.username));
+    return leaders.length
+      ? `<div class="admin-leaderboard-scroll"><ol class="mb-0">${{leaders.map((user) => `<li>${{escape(user.username)}} : ${{user.score}} / ${{user.answers}}</li>`).join("")}}</ol></div>`
+      : "<p class=\\"mb-0 text-body-secondary\\">Aucune reponse recue.</p>";
+  }}
+
+  function openResultsModal(mode) {{
+    if (!activeQuiz) return;
+    syncResultsModalFullscreen();
+    const session = activeSession() || {{ answers: [] }};
+    const correctAnswers = session.answers.filter((answer) => answer.correct);
+    resultsModal.hidden = false;
+    resultsModal.dataset.mode = mode;
+    resultsTitle.textContent = activeQuiz.title || "Question live";
+    resultsSubtitle.textContent = `Groupe ${{activeQuiz.group}}`;
+    if (mode === "responses") {{
+      resultsBody.innerHTML = `
+        <div class="admin-results-count">${{session.answers.length}}</div>
+        <p class="text-body-secondary mb-0">reponse(s) envoyee(s)</p>
+      `;
+      resultsActions.innerHTML = '<button class="btn btn-primary" type="button" data-show-correction>Afficher la correction</button>';
+      resultsActions.querySelector("[data-show-correction]").addEventListener("click", () => openResultsModal("correction"));
+      return;
+    }}
+    const podium = correctAnswers.slice(0, 3).map((answer, index) => `<li>${{index + 1}}. ${{escape(answer.username)}} <span class="text-body-secondary">${{escape(answer.answeredAt)}}</span></li>`).join("");
+    resultsBody.innerHTML = `
+      <h3 class="h5">Bonne reponse</h3>
+      ${{correctOptionsByQuestion().map((question) => `
+        <p class="mb-1 fw-semibold">${{escape(question.title)}}</p>
+        <ul>${{question.labels.map((label) => `<li>${{escape(label)}}</li>`).join("")}}</ul>
+      `).join("")}}
+      <p>${{correctAnswers.length}} bonne(s) reponse(s) sur ${{session.answers.length}} reponse(s).</p>
+      <h3 class="h5">Podium</h3>
+      <ol>${{podium || "<li>Aucune bonne reponse.</li>"}}</ol>
+      <h3 class="h5">Leaderboard</h3>
+      ${{leaderboardHtml()}}
+    `;
+    resultsActions.innerHTML = '<button class="btn btn-primary" type="button" data-send-next>Passer a la suite</button>';
+    resultsActions.querySelector("[data-send-next]").addEventListener("click", sendNextFlowItem);
+  }}
+
+  function closeResultsModal() {{
+    resultsModal.hidden = true;
+  }}
+
+  function sendFlowItem(index) {{
+    const item = flowItems[index];
+    if (!item) {{
+      setStatus("warning", "Aucun element suivant dans le parcours.");
+      return;
+    }}
+    activeFlowIndex = index;
+    localStorage.setItem(flowIndexKey, String(index));
+    renderPreview();
+    if (item.type === "section" || item.type === "content") {{
+      const url = new URL(item.href, window.location.href);
+      publish(action("navigate", {{ url: url.href }}));
+      closeResultsModal();
+      return;
+    }}
+    if (item.type === "question") {{
+      startLiveQuiz(item.question, index);
+    }}
+  }}
+
+  function sendNextFlowItem() {{
+    if (activeFlowIndex === null) {{
+      setStatus("warning", "Aucune position courante dans le parcours.");
+      closeResultsModal();
+      return;
+    }}
+    sendFlowItem(activeFlowIndex + 1);
+  }}
+
+  function sendPreviousFlowItem() {{
+    if (activeFlowIndex === null) {{
+      sendFlowItem(0);
+      return;
+    }}
+    sendFlowItem(Math.max(0, activeFlowIndex - 1));
+  }}
+
+  function sendCurrentFlowItem() {{
+    if (activeFlowIndex === null) {{
+      setStatus("warning", "Aucune section courante dans le parcours.");
+      return;
+    }}
+    const sectionIndex = nearestSectionIndex(activeFlowIndex);
+    const section = flowItems[sectionIndex];
+    if (!section?.href) {{
+      setStatus("warning", "Aucune section courante dans le parcours.");
+      return;
+    }}
+    const url = new URL(section.href, window.location.href);
+    publish(action("navigate", {{ url: url.href }}));
+    closeResultsModal();
+  }}
+
+  function connectResponses() {{
+    if (responseSource) responseSource.close();
+    if (!window.EventSource) {{
+      setStatus("warning", "SSE indisponible pour les reponses.");
+      return;
+    }}
+    responseSource = new EventSource(`${{currentAdminTopic()}}/sse`);
+    responseSource.onmessage = (event) => {{
+      try {{
+        const payload = JSON.parse(event.data);
+        const message = payload.message ? JSON.parse(payload.message) : payload;
+        handleQuizResponse(message);
+      }} catch (_error) {{
+        // Ignore non-quiz messages on the admin response topic.
+      }}
+    }};
+  }}
+
+  document.querySelector("[data-close-results]").addEventListener("click", closeResultsModal);
+  document.querySelector("[data-flow-prev]").addEventListener("click", sendPreviousFlowItem);
+  document.querySelector("[data-flow-current]").addEventListener("click", sendCurrentFlowItem);
+  document.querySelector("[data-flow-next]").addEventListener("click", sendNextFlowItem);
+  document.querySelector("[data-preview-fullscreen]").addEventListener("click", togglePreviewFullscreen);
+  previewFrame.addEventListener("load", () => {{
+    revealPreviewPlayer();
+    bindPreviewLinks();
+  }});
+  document.addEventListener("fullscreenchange", updateFullscreenButton);
+
+  document.querySelectorAll("[data-flow-index]").forEach((button) => {{
+    button.addEventListener("click", () => {{
+      sendFlowItem(Number.parseInt(button.dataset.flowIndex, 10));
+    }});
+  }});
+
+  document.querySelector("[data-send-text]").addEventListener("click", () => {{
+    publish(messageInput.value);
+  }});
+
+  document.querySelector("[data-admin-chat-send]").addEventListener("click", () => {{
+    publish(chatInput.value);
+    chatInput.value = "";
+  }});
+
+  document.querySelector("[data-send-code]").addEventListener("click", () => {{
+    publish(action("code", {{ title: "Code live", source: messageInput.value }}));
+  }});
+
+  questionSelect.addEventListener("change", updateQuestionJson);
+
+  document.querySelector("[data-send-bank-question]").addEventListener("click", () => {{
+    startLiveQuiz(selectedBankQuestion().question);
+  }});
+
+  document.querySelector("[data-send-json-question]").addEventListener("click", () => {{
+    try {{
+      startLiveQuiz(JSON.parse(questionJson.value));
+    }} catch (error) {{
+      setStatus("danger", `Question JSON invalide : ${{error.message}}`);
+    }}
+  }});
+
+  groupSelect.addEventListener("change", () => {{
+    connectResponses();
+    connectAdminChat();
+  }});
+
+  if (sessionStorage.getItem(authKey) === "true") {{
+    showApp();
+  }}
+}})();
+</script>
+</body>
+</html>
+"""
+
+
+def course_index_markdown(courses):
+    lines = ["# Documentation en ligne", ""]
+    lines.append("Supports de cours et exercices interactifs pour BUT INFO S3 SAE-C.")
+    lines.append("")
+    for course in courses:
+        lines.append(f"- [{course['title']}]({course['html']})")
+    lines.append("")
+    lines.append(f"[Telecharger le PDF complet]({FULL_PDF})")
+    lines.append("")
+    lines.append(f"[Reviser avec les mini-quiz]({QUIZ_INDEX})")
+    return "\n".join(lines) + "\n"
+
+
+def exercises_markdown():
+    lines = ["# Exercices", ""]
+    lines.append("Tous les exercices interactifs du support.")
+    lines.append("")
+    for exercise in all_exercises():
+        rel_path = exercise["path"]
+        lines.append(f"## {exercise['title']}")
+        lines.append("")
+        lines.append(f"{{{{ c_exercise: {rel_path} }}}}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def quiz_index_markdown(courses):
+    lines = ["# Mini-quiz", ""]
+    lines.append("Tous les quiz du support. La validation est enregistree localement dans le navigateur.")
+    lines.append("")
+    for course in courses:
+        quizzes = quizzes_from_source(read_text(course["path"]), course)
+        if not quizzes:
+            continue
+        lines.append(f"## {course['title']}")
+        lines.append("")
+        for quiz in quizzes:
+            lines.append(render_html_quiz(quiz, fold_validated=True))
+            lines.append("")
+    return "\n".join(lines)
+
+
+def build_quiz_pdf(courses):
+    blocks = ["# Mini-quiz BUT INFO S3 SAE-C", ""]
+    for course in courses:
+        quizzes = quizzes_from_source(read_text(course["path"]), course)
+        for quiz in quizzes:
+            blocks.append(render_pdf_quiz(quiz, show_answers=False))
+            blocks.append("")
+    run_pandoc("\n".join(blocks), BUILD / QUIZ_PDF, html_mode=False)
+
+
+def build_full_pdf(courses):
+    blocks = ["# BUT INFO S3 SAE-C", ""]
+    for course in courses:
+        blocks.append(expand_markdown(read_text(course["path"]), html_mode=False, document_id=course["stem"]))
+        blocks.append("\\newpage")
+        blocks.append("")
+    run_pandoc("\n".join(blocks), BUILD / FULL_PDF, html_mode=False)
+
+
+def build_project_pdf():
+    subprocess.run(["make", "-C", str(SENSORS_PROJECT), "pdf"], check=True)
+    shutil.copy2(SENSORS_PROJECT_PDF, BUILD / PROJECT_PDF)
+
+
+def main():
+    BUILD.mkdir(parents=True, exist_ok=True)
+    PDF_DST.mkdir(parents=True, exist_ok=True)
+    ZIP_DST.mkdir(parents=True, exist_ok=True)
+    copy_course_assets()
+    write_pdf_footer()
+    build_project_pdf()
+    if PLAYER_DST.exists():
+        shutil.rmtree(PLAYER_DST)
+    shutil.copytree(PLAYER_SRC, PLAYER_DST)
+    if not TYPING_AUDIO_SRC.exists():
+        raise FileNotFoundError(f"Audio de frappe absent : {TYPING_AUDIO_SRC}")
+    shutil.copy2(TYPING_AUDIO_SRC, PLAYER_DST / "typing.mp3")
+    if not MATRIX_AUDIO_SRC.exists():
+        raise FileNotFoundError(f"Audio d'imprimante matricielle absent : {MATRIX_AUDIO_SRC}")
+    shutil.copy2(MATRIX_AUDIO_SRC, PLAYER_DST / "matrix.mp3")
+    if VENDOR_DST.exists():
+        shutil.rmtree(VENDOR_DST)
+    shutil.copytree(VENDOR_SRC, VENDOR_DST)
+    write_codemirror_include()
+    write_tscc_include()
+
+    courses = course_infos()
+    all_starters = all_exercises()
+    write_starter_zip(BUILD / FULL_ZIP, all_starters)
+    course_starters = {}
+    for course in courses:
+        source = read_text(course["path"])
+        exercises = [load_exercise(path) for path in exercise_directives(source)]
+        zip_href = starter_zip_name(course["stem"]) if exercises else None
+        if zip_href:
+            write_starter_zip(BUILD / zip_href, exercises)
+        course_starters[course["html"]] = zip_href
+
+    write_text(BUILD / "index.html", landing_page())
+    write_text(BUILD / LIVE_CODE_PAGE, live_code_page())
+    write_text(BUILD / LIVE_QUIZ_PAGE, live_quiz_page())
+
+    run_pandoc(course_index_markdown(courses), BUILD / COURSE_INDEX, True, "Documentation en ligne")
+    postprocess_doc_page(BUILD / COURSE_INDEX, courses, COURSE_INDEX, "course", FULL_PDF, FULL_ZIP)
+
+    run_pandoc(expand_markdown(exercises_markdown(), html_mode=True), BUILD / "exercices.html", True, "Exercices")
+    postprocess_doc_page(BUILD / "exercices.html", courses, "exercices.html", "exercises", None, FULL_ZIP)
+
+    run_pandoc(quiz_index_markdown(courses), BUILD / QUIZ_INDEX, True, "Mini-quiz")
+    postprocess_doc_page(BUILD / QUIZ_INDEX, courses, QUIZ_INDEX, "quiz", QUIZ_PDF, None)
+
+    milestones_source = read_text(MILESTONES_PATH)
+    run_pandoc(expand_markdown(milestones_source, html_mode=True), BUILD / MILESTONES_PAGE, True, "Jalons autonomes")
+    postprocess_doc_page(BUILD / MILESTONES_PAGE, courses, MILESTONES_PAGE, "course")
+    validate_milestone_anchors(BUILD / MILESTONES_PAGE)
+
+    evaluation_source = read_text(EVALUATION_PATH)
+    run_pandoc(expand_markdown(evaluation_source, html_mode=True), BUILD / EVALUATION_PAGE, True, "Évaluation de la SAE C")
+    postprocess_doc_page(BUILD / EVALUATION_PAGE, courses, EVALUATION_PAGE, "course")
+
+    admin_flow = []
+    for course in courses:
+        source = read_text(course["path"])
+        run_pandoc(expand_markdown(source, html_mode=True, document_id=course["stem"]), BUILD / course["html"], True, course["title"])
+        raw_body = TITLE_BLOCK_RE.sub("", extract_body(read_text(BUILD / course["html"]))).strip()
+        admin_flow.extend(admin_flow_items(course, source, raw_body))
+        postprocess_doc_page(BUILD / course["html"], courses, course["html"], "course", course["pdf"], course_starters[course["html"]])
+        run_pandoc(expand_markdown(source, html_mode=False, document_id=course["stem"]), BUILD / course["pdf"], False)
+
+    write_text(BUILD / ADMIN_PAGE, admin_page(admin_flow, live_question_bank(courses)))
+    build_full_pdf(courses)
+    build_quiz_pdf(courses)
+
+
+if __name__ == "__main__":
+    main()

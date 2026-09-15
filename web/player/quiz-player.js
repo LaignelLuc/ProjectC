@@ -1,0 +1,275 @@
+<script>
+class QuizPlayer extends HTMLElement {
+  static progressStorageKey = "sae-c.quiz.progress.v1";
+
+  t(key, values) {
+    return window.SAECMessages.t(`quiz.${key}`, values);
+  }
+
+  connectedCallback() {
+    this.quiz = this.parseQuiz();
+    this.progress = this.readProgress();
+    this.shuffleRound = 0;
+    this.restartMode = false;
+    this.render();
+    this.onPageShow = () => this.refreshProgress();
+    this.onStorage = (event) => {
+      if (event.key === QuizPlayer.progressStorageKey) {
+        this.refreshProgress();
+      }
+    };
+    window.addEventListener("pageshow", this.onPageShow);
+    window.addEventListener("storage", this.onStorage);
+  }
+
+  disconnectedCallback() {
+    window.removeEventListener("pageshow", this.onPageShow);
+    window.removeEventListener("storage", this.onStorage);
+  }
+
+  parseQuiz() {
+    const bytes = Uint8Array.from(atob(this.dataset.quizB64), (char) => char.charCodeAt(0));
+    const json = new TextDecoder("utf-8").decode(bytes);
+    return JSON.parse(json);
+  }
+
+  render() {
+    const state = this.quizProgress();
+    const validated = state.validated === true;
+    const foldValidated = this.dataset.foldValidated === "true";
+    const openAttribute = foldValidated && validated ? "" : " open";
+    this.innerHTML = `
+      <details class="quiz-player card my-4" data-quiz-id="${this.escape(this.quiz.id)}"${openAttribute}>
+        <summary class="quiz-player__header card-header">
+          <div>
+            <div class="content-kind content-kind--quiz"><span class="content-kind__icon" aria-hidden="true">?</span>${this.escape(window.SAECMessages.t("contentType.quiz"))}</div>
+            <h2 class="quiz-player__title h5">${this.escape(this.quiz.title)}</h2>
+            ${this.quiz.description ? `<p class="quiz-player__description">${this.escape(this.quiz.description)}</p>` : ""}
+          </div>
+          <span class="quiz-player__badge badge ${validated ? "text-bg-success" : "text-bg-secondary"}">${this.escape(this.t(validated ? "valid" : "todo"))}</span>
+        </summary>
+        <div class="card-body">
+          ${this.quiz.questions.map((question, index) => this.renderQuestion(question, index)).join("")}
+          <div class="quiz-player__actions">
+            <button type="button" class="quiz-player__validate btn btn-primary">${this.escape(this.t("validate"))}</button>
+            <button type="button" class="quiz-player__hint btn btn-info d-none">${this.escape(this.t("hints"))}</button>
+          </div>
+          <div class="quiz-player__feedback mt-3" aria-live="polite"></div>
+        </div>
+      </details>
+    `;
+    this.querySelector(".quiz-player__validate").addEventListener("click", () => this.validate());
+    this.querySelector(".quiz-player__hint").addEventListener("click", () => this.showHints());
+  }
+
+  renderQuestion(question, index) {
+    const options = this.shuffle(question.options, `${this.quiz.id}:${question.id}:${this.shuffleRound}`);
+    return `
+      <fieldset class="quiz-player__question" data-question-id="${this.escape(question.id)}">
+        <legend class="quiz-player__question-title">${index + 1}. ${this.escape(question.title)}</legend>
+        ${question.description ? `<p class="quiz-player__question-description">${this.escape(question.description)}</p>` : ""}
+        <div class="quiz-player__options">
+          ${options.map((option) => this.renderOption(question, option)).join("")}
+        </div>
+        <div class="quiz-player__question-feedback"></div>
+      </fieldset>
+    `;
+  }
+
+  renderOption(question, option) {
+    return `
+      <label class="quiz-player__option form-check">
+        <input class="form-check-input" type="checkbox" name="${this.escape(question.id)}" value="${this.escape(option.id)}">
+        <span class="form-check-label">${this.escape(option.text)}</span>
+      </label>
+    `;
+  }
+
+  validate() {
+    if (this.restartMode) {
+      this.restart();
+      return;
+    }
+
+    const quizState = this.quizProgress();
+    let allCorrect = true;
+
+    for (const question of this.quiz.questions) {
+      const fieldset = this.querySelector(`[data-question-id="${this.escapeSelector(question.id)}"]`);
+      const selected = new Set(Array.from(fieldset.querySelectorAll("input:checked"), (input) => input.value));
+      const expected = new Set(question.options.filter((option) => option.correct).map((option) => option.id));
+      const correct = this.sameSet(selected, expected);
+      const questionState = quizState.questions[question.id] || { validated: false, attempts: 0 };
+      if (correct) {
+        questionState.validated = true;
+      } else {
+        questionState.validated = false;
+        questionState.attempts += 1;
+        allCorrect = false;
+      }
+      quizState.questions[question.id] = questionState;
+      this.renderQuestionFeedback(fieldset, question, questionState, correct);
+    }
+
+    quizState.validated = allCorrect;
+    if (allCorrect) {
+      quizState.validatedAt = new Date().toISOString();
+    }
+    this.progress[this.quiz.id] = quizState;
+    this.writeProgress();
+    this.updateQuizBadge(allCorrect);
+
+    if (allCorrect) {
+      this.setFeedback();
+      this.setValidateClass("btn-success");
+      this.querySelector(".quiz-player__validate").textContent = this.t("validate");
+      this.querySelector(".quiz-player__hint").classList.add("d-none");
+      if (this.dataset.foldValidated === "true") {
+        this.querySelector(".quiz-player").open = false;
+      }
+    } else {
+      this.restartMode = true;
+      this.setFeedback(this.t("incorrect"), "warning");
+      this.setValidateClass("btn-warning");
+      this.querySelector(".quiz-player__validate").textContent = this.t("restart");
+      this.toggleHintButton();
+    }
+  }
+
+  restart() {
+    this.shuffleRound += 1;
+    this.restartMode = false;
+    this.render();
+  }
+
+  renderQuestionFeedback(fieldset, question, state, correct) {
+    const feedback = fieldset.querySelector(".quiz-player__question-feedback");
+    feedback.innerHTML = "";
+    fieldset.classList.toggle("quiz-player__question--ok", correct);
+    fieldset.classList.toggle("quiz-player__question--wrong", !correct && state.attempts > 0);
+  }
+
+  toggleHintButton() {
+    const hasHints = this.quiz.questions.some((question) => question.options.some((option) => option.hint));
+    this.querySelector(".quiz-player__hint").classList.toggle("d-none", !hasHints);
+  }
+
+  showHints() {
+    for (const question of this.quiz.questions) {
+      const fieldset = this.querySelector(`[data-question-id="${this.escapeSelector(question.id)}"]`);
+      const hints = question.options.filter((option) => option.hint).map((option) => `<li>${this.escape(option.hint)}</li>`).join("");
+      if (hints) {
+        fieldset.querySelector(".quiz-player__question-feedback").innerHTML = `<div class="alert alert-info py-2 mt-2 mb-0"><ul class="mb-0">${hints}</ul></div>`;
+      }
+    }
+  }
+
+  showAnswers() {
+    for (const question of this.quiz.questions) {
+      const fieldset = this.querySelector(`[data-question-id="${this.escapeSelector(question.id)}"]`);
+      const expected = new Set(question.options.filter((option) => option.correct).map((option) => option.id));
+      for (const input of fieldset.querySelectorAll("input")) {
+        input.closest(".quiz-player__option").classList.toggle("quiz-player__option--answer", expected.has(input.value));
+      }
+    }
+  }
+
+  setFeedback(message, type) {
+    const feedback = this.querySelector(".quiz-player__feedback");
+    feedback.innerHTML = message ? `<div class="alert alert-${type} mb-0">${this.escape(message)}</div>` : "";
+  }
+
+  setValidateClass(className) {
+    const button = this.querySelector(".quiz-player__validate");
+    button.className = `quiz-player__validate btn ${className}`;
+  }
+
+  updateQuizBadge(validated) {
+    const badge = this.querySelector(".quiz-player__badge");
+    badge.className = `quiz-player__badge badge ${validated ? "text-bg-success" : "text-bg-secondary"}`;
+    badge.textContent = this.t(validated ? "valid" : "todo");
+  }
+
+  quizProgress() {
+    const existing = this.progress[this.quiz.id] || {};
+    return {
+      validated: existing.validated === true,
+      validatedAt: existing.validatedAt || null,
+      questions: existing.questions || {},
+    };
+  }
+
+  readProgress() {
+    try {
+      return JSON.parse(localStorage.getItem("sae-c.quiz.progress.v1") || "{}");
+    } catch (_error) {
+      return {};
+    }
+  }
+
+  writeProgress() {
+    const progress = this.readProgress();
+    progress[this.quiz.id] = this.progress[this.quiz.id];
+    this.progress = progress;
+    localStorage.setItem(QuizPlayer.progressStorageKey, JSON.stringify(progress));
+  }
+
+  refreshProgress() {
+    const previous = JSON.stringify(this.quizProgress());
+    this.progress = this.readProgress();
+    if (JSON.stringify(this.quizProgress()) !== previous) {
+      this.restartMode = false;
+      this.render();
+    }
+  }
+
+  shuffle(values, seedText) {
+    const items = values.slice();
+    let seed = this.hash(seedText);
+    for (let index = items.length - 1; index > 0; index -= 1) {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      const swapIndex = seed % (index + 1);
+      [items[index], items[swapIndex]] = [items[swapIndex], items[index]];
+    }
+    return items;
+  }
+
+  hash(value) {
+    let hash = 2166136261;
+    for (const char of String(value)) {
+      hash ^= char.charCodeAt(0);
+      hash = Math.imul(hash, 16777619);
+    }
+    return hash >>> 0;
+  }
+
+  sameSet(left, right) {
+    if (left.size !== right.size) {
+      return false;
+    }
+    for (const value of left) {
+      if (!right.has(value)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  escapeSelector(value) {
+    if (window.CSS?.escape) {
+      return CSS.escape(value);
+    }
+    return String(value).replaceAll('"', '\\"');
+  }
+
+  escape(value) {
+    return String(value)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;");
+  }
+}
+
+customElements.define("quiz-player", QuizPlayer);
+</script>
