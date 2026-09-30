@@ -14,6 +14,8 @@ static void fuite_simple(void)
     values[2] = 30;
     printf("somme = %d\n", values[0] + values[1] + values[2]);
     /* TODO : corriger la fuite sans supprimer l'allocation. */
+    free(values);
+    values = NULL;
 }
 
 static void pointeur_perdu(void)
@@ -25,6 +27,7 @@ static void pointeur_perdu(void)
     }
     strcpy(message, "bonjour");
     printf("%s\n", message);
+    free(message);
     message = NULL;
     /* TODO : corriger la perte de la dernière adresse de l'allocation. */
 }
@@ -39,6 +42,7 @@ static void double_liberation(void)
     *value = 42;
     printf("value = %d\n", *value);
     free(value);
+    value = NULL;
     free(value);
     /* TODO : conserver une seule libération de cette allocation. */
 }
@@ -51,9 +55,11 @@ static void acces_apres_free(void)
         return;
     }
     *value = 7;
-    free(value);
     printf("value = %d\n", *value);
+    free(value);
+    value = NULL;
     /* TODO : ne plus lire value après sa libération. */
+
 }
 
 int main(int argc, char *argv[])
