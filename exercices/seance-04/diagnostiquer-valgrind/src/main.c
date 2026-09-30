@@ -43,7 +43,6 @@ static void double_liberation(void)
     printf("value = %d\n", *value);
     free(value);
     value = NULL;
-    free(value);
     /* TODO : conserver une seule libération de cette allocation. */
 }
 

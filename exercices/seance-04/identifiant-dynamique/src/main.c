@@ -12,8 +12,8 @@ static char *construire_identifiant(const char *prenom, const char *nom)
     int taille = strlen(prenom)+strlen(nom) +2;
     char *copie = malloc(taille);
     strcpy(copie, prenom);
-    strcpy(copie,".");
-    strcpy(copie, nom);
+    strcat(copie,".");
+    strcat(copie, nom);
     return copie;
 }
 
