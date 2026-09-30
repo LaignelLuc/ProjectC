@@ -1,10 +1,10 @@
 #include <stdio.h>
 
-#include "projet/report.h"
+#include "report.c"
 
 int main(void)
 {
-    int values[5] = {3, 5, 7, 2, 4}
+    int values[5] = {3, 5, 7, 2, 4};
     int input;
     int maximum = values[0];
     int uninitialized;
@@ -12,7 +12,7 @@ int main(void)
     int index;
     size_t count = 5;
 
-    sum = 0;
+    int sum = 0;
     printf("conversion = %d\n", conversion);
     printf("valeur avant lecture = %d\n", uninitialized);
 
