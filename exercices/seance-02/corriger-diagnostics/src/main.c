@@ -1,23 +1,23 @@
 #include <stdio.h>
 
-#include "report.c"
+#include "projet/report.h"
 
 int main(void)
 {
     int values[5] = {3, 5, 7, 2, 4};
     int input;
     int maximum = values[0];
-    int uninitialized;
-    int conversion = 3.7;
-    int index;
+    int uninitialized = 5;
+    double conversion = 3.7;
+    size_t index;
     size_t count = 5;
 
     int sum = 0;
-    printf("conversion = %d\n", conversion);
+    printf("conversion = %f\n", conversion);
     printf("valeur avant lecture = %d\n", uninitialized);
 
-    scanf("%d", input);
-    if (input = 0) {
+    int a = scanf("%d", &input);
+    if (a == 0) {
         return 1;
     }
 

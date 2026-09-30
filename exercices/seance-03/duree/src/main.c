@@ -12,6 +12,16 @@ void normaliser_duree(struct Duree *duree)
      * À compléter : modifiez les champs pointés pour obtenir une durée
      * normalisée. Utilisez duree->heures, duree->minutes et duree->secondes.
      */
+
+    int minutePlus = duree->secondes / 60;
+    duree->secondes = duree->secondes % 60;
+    duree->minutes += minutePlus;
+
+    int heurePlus = duree->minutes / 60;
+    duree->minutes = duree->minutes % 60;
+    duree->heures += heurePlus;
+
+    
 }
 
 int main(void)
