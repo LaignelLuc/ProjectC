@@ -2,12 +2,16 @@
 
 void echanger_entiers(int *a, int *b)
 {
-  // TODO 
+  int tmp = *a;
+  *a = *b;
+  *b = tmp;
 }
 
 void ordonner_entiers(int *a, int *b)
 {
-   // TODO
+   if (*a > *b){
+   		echanger_entiers(a,b);
+   }
 }
 
 int main(void)

@@ -9,9 +9,12 @@ static char *construire_identifiant(const char *prenom, const char *nom)
      * TODO : réserver strlen(prenom) + strlen(nom) + 2 octets, construire
      * "prenom.nom" avec strcpy et strcat, puis retourner cette nouvelle chaîne.
      */
-    (void)prenom;
-    (void)nom;
-    return NULL;
+    int taille = strlen(prenom)+strlen(nom) +2;
+    char *copie = malloc(taille);
+    strcpy(copie, prenom);
+    strcpy(copie,".");
+    strcpy(copie, nom);
+    return copie;
 }
 
 int main(void)
