@@ -24,8 +24,9 @@ typedef struct {
 
 static int parse_options(int argc, char *argv[], ProgramOptions *options)
 {
-    (void)argc;
-    (void)argv;
+    int csv_seen = 0;
+    int label_seen = 0;
+
 
     if (options == NULL) {
         return 0;
@@ -42,6 +43,37 @@ static int parse_options(int argc, char *argv[], ProgramOptions *options)
      * defaut du fichier CSV et du libelle. Utiliser strcmp et refuser les
      * options inconnues, dupliquees ou incompletes. Sans source, l'URL par
      * defaut est utilisee. */
+
+    for(int i = 1; i < argc; i += 2){
+        if(i + 1 >= argc){
+            return 0;
+        }
+        if(strcmp(argv[i], "--url") == 0){
+            if(options->url != NULL || options->file != NULL){
+                return 0;
+            }
+            options->url = argv[i+1];
+        } else if(strcmp(argv[i], "--file") == 0){
+            if(options->url != NULL || options->file != NULL){
+                return 0;
+            }
+            options->file = argv[i+1];
+        } else if(strcmp(argv[i], "--csv") == 0){
+            if(csv_seen){
+                return 0;
+            }
+            options->csv_path = argv[i+1];
+            csv_seen +=1;
+        } else if(strcmp(argv[i], "--label") == 0){
+            if(label_seen){
+                return 0;
+            }
+            options->label = argv[i+1];
+            label_seen +=1;
+        } else {
+            return 0;
+        }
+    }
     return 1;
 }
 
@@ -51,14 +83,27 @@ static int write_csv_report(
     const SensorReportOptions *report_options
 )
 {
-    (void)path;
-    (void)dataset;
-    (void)report_options;
-
     /* TODO S4 : ouvrir path avec fopen("w"), appeler
      * sensor_report_write_csv, detecter les erreurs (dont fclose), fermer le
      * fichier dans tous les cas et retourner 1 en cas de succes. */
-    return 0;
+    FILE *file;
+    int res = 0;
+
+    if(path == NULL || dataset == NULL || report_options == NULL){
+        return res;
+    }
+
+    file = fopen(path, "w");
+    if(file == NULL){
+        perror(path);
+        return res;
+    }
+    res = sensor_report_write_csv(file, dataset, report_options);
+    if(fclose(file) != 0){
+        return 0;
+    }
+    
+    return res;
 }
 
 int main(int argc, char *argv[])

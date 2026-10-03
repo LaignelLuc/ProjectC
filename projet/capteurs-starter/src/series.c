@@ -3,6 +3,9 @@
 
 void measure_series_init(MeasureSeries *series)
 {
+    if(series == NULL){
+        return;
+    }
     series->items = NULL;
     series->count = 0;
     series->capacity = 0;
@@ -41,6 +44,9 @@ int measure_series_append(MeasureSeries *series, TemperatureMeasure measure)
 
 void measure_series_clear(MeasureSeries *series)
 {
+    if(series == NULL){
+        return;
+    }
     free(series->items);
     measure_series_init(series);
 
